@@ -3,9 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.database import create_db_and_tables
 
-from api.portfolio.models import ProjectTag, CertificateTag, Tag, Project, ProjectTranslation, Academy, Certificate
-
-from api.portfolio.router import router as portfolio_router
+from api.portfolio.routers import portfolio_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,7 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(portfolio_router, prefix="/api")
+app.include_router(portfolio_router, prefix="/portfolio")
 
 @app.get("/")
 async def global_root():

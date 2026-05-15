@@ -1,15 +1,11 @@
 from typing import List
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, status, HTTPException
 from sqlmodel import select
 
 from api.database import SessionDep
 from api.portfolio.models import Tag, TagCreate, TagUpdate
 
-router = APIRouter(prefix="/portfolio", tags=["Gabriel Mayorga - Portfolio"])
-
-@router.get("/")
-async def get_portfolio_root():
-    return {"message": "Welcome to Gabox's portfolio!"}
+router = APIRouter()
 
 @router.post("/tag", response_model=Tag, status_code=status.HTTP_201_CREATED)
 async def create_tag(tag_data: TagCreate, db: SessionDep):
@@ -31,7 +27,7 @@ async def get_tag(tag_id: int, db: SessionDep):
     return tag
 
 @router.patch("/tag/{tag_id}", response_model=Tag)
-async def update_tag(tag_id: int, tag_data: TagUpdate,db: SessionDep):
+async def update_tag(tag_id: int, tag_data: TagUpdate, db: SessionDep):
     tag = db.get(Tag, tag_id)
     if not tag:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product with id {tag_id} not found")
@@ -50,4 +46,4 @@ async def delete_tag(tag_id: int, db: SessionDep):
         raise HTTPException(status_code=404, detail="Tag no found")
     db.delete(tag)
     db.commit()
-    return {"detail": "Ok"}
+    return {"detail": "ok"}

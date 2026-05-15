@@ -55,8 +55,8 @@ class Tag(TagBase, table=True):
 
 class ProjectBase(SQLModel):
     year: int = Field(index=True)
-    type: ProjectType = Field(sa_column_kwargs={"nullable": False})
-    difficulty: DifficultyLevel = Field(sa_column_kwargs={"nullable": False})
+    type: ProjectType = Field(default=ProjectType.WEB)
+    difficulty: DifficultyLevel = Field(default=DifficultyLevel.JUNIOR)
     image_url: Optional[str] = None
     git_url: Optional[str] = None
     deploy_url: Optional[str] = None
