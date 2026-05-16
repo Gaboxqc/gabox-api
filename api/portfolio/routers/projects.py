@@ -1,9 +1,9 @@
 from typing import List
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, status, HTTPException
 from sqlmodel import select
 
 from api.database import SessionDep
-from api.portfolio.models import Tag, TagCreate, TagUpdate, Project, ProjectCreate, ProjectUpdate
+from api.portfolio.models import Project, ProjectCreate, ProjectUpdate
 
 router = APIRouter()
 
