@@ -16,7 +16,7 @@ async def create_project(project_data: ProjectCreate, db: SessionDep):
     return new_project
 
 @router.get("/project", response_model=List[Project])
-async def list_projects(db: SessionDep):
+async def list_project(db: SessionDep):
     return db.exec(select(Project)).all()
 
 @router.get("/project/{project_id}", response_model=Project)
@@ -46,4 +46,4 @@ async def delete_project(project_id: int, db: SessionDep):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project with id {project_id} not found")
     db.delete(project)
     db.commit()
-    return {"detail": "ok"}
+    return None

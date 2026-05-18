@@ -46,4 +46,4 @@ async def delete_academy(academy_id: int, db: SessionDep):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Academy with id {academy_id} not found")
     db.delete(academy)
     db.commit()
-    return {"detail":"ok"}
+    return None

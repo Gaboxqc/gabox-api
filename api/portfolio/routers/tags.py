@@ -16,7 +16,7 @@ async def create_tag(tag_data: TagCreate, db: SessionDep):
     return new_tag
 
 @router.get("/tag", response_model=List[Tag])
-async def list_tags(db: SessionDep):
+async def list_tag(db: SessionDep):
     return db.exec(select(Tag)).all()
 
 @router.get("/tag/{tag_id}", response_model=Tag)
@@ -46,4 +46,4 @@ async def delete_tag(tag_id: int, db: SessionDep):
         raise HTTPException(status_code=404, detail="Tag no found")
     db.delete(tag)
     db.commit()
-    return {"detail": "ok"}
+    return None

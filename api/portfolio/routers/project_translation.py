@@ -51,4 +51,4 @@ async def delete_project_translation(project_translation_id: int, db: SessionDep
                             detail=f"Project Translation with id {project_translation_id} not found")
     db.delete(project_translation)
     db.commit()
-    return {"detail": "ok"}
+    return None
