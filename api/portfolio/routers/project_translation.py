@@ -7,7 +7,6 @@ from api.database import SessionDep
 
 router = APIRouter()
 
-#Add new table LANGUAGE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 @router.post("/project-translation", response_model=ProjectTranslation)
 async def create_project_translation(project_translation_data: ProjectTranslationCreate, db: SessionDep):
     new_project_translation = ProjectTranslation.model_validate(project_translation_data.model_dump())
