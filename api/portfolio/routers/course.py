@@ -37,15 +37,11 @@ async def get_courses_by(
         db: SessionDep,
         category_id: Optional[int] = Query(None, description="Filtrar por ID de Categoría"),
         tag_id: Optional[int] = Query(None, description="Filtrar por ID de Tag (Lenguaje/Framework)"),
-        is_main: Optional[bool] = Query(None, description="True para mostrar solo las principales"),
 ):
     query = select(Course)
 
     if category_id:
         query = query.where(Course.category_id == category_id)
-
-    if is_main is not None:
-        query = query.where(Course.isMain == is_main)
 
     if tag_id:
         query = (
@@ -64,6 +60,7 @@ async def update_course(course_id: int, course_data: CourseUpdate, db: SessionDe
     if not course:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail=f"Course with id {course_id} not found")
+
     update_dic = course_data.model_dump(exclude_unset=True)
     for key, value in update_dic.items():
         setattr(course, key, value)
