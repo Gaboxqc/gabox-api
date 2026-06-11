@@ -36,6 +36,9 @@ class CertificationTag(SQLModel, table=True):
 # LAYER 2: INDEPENDENT AUXILIARY MODELS
 # ==============================================================================
 
+# ProjectType, DifficultyLevel, Category are seeded values —
+# managed via migrations, not the API. No Create/Update schemas needed.
+
 # --- Project Type ---
 class ProjectTypeBase(SQLModel):
     name: str = Field(unique=True, index=True, min_length=1)
@@ -159,8 +162,7 @@ class ProjectTranslationBase(SQLModel):
 
 
 class ProjectTranslationCreate(ProjectTranslationBase):
-    language_code: str
-    project_id: int
+    pass
 
 
 class ProjectTranslationUpdate(SQLModel):
@@ -237,13 +239,16 @@ class CertificationTranslation(CertificationTranslationBase, table=True):
 # ==============================================================================
 
 # --- Core Entity: Project ---
-class ProjectBase(SQLModel):
+class ProjectBaseFlat(SQLModel):
     year: int = Field(index=True)
-    project_type_id: int = Field(foreign_key="portfolio_project_type.id")
-    difficulty_id: int = Field(foreign_key="portfolio_difficulty_level.id")
     image_url: Optional[str] = None
     git_url: Optional[str] = None
     deploy_url: Optional[str] = None
+
+
+class ProjectBase(ProjectBaseFlat):
+    project_type_id: int = Field(foreign_key="portfolio_project_type.id")
+    difficulty_level_id: int = Field(foreign_key="portfolio_difficulty_level.id")
 
 
 class ProjectCreate(ProjectBase):
@@ -253,14 +258,10 @@ class ProjectCreate(ProjectBase):
 class ProjectUpdate(SQLModel):
     year: Optional[int] = None
     project_type_id: Optional[int] = None
-    difficulty_id: Optional[int] = None
+    difficulty_level_id: Optional[int] = None
     image_url: Optional[str] = None
     git_url: Optional[str] = None
     deploy_url: Optional[str] = None
-
-
-class ProjectRead(ProjectBase):
-    id: int
 
 
 class Project(ProjectBase, table=True):
@@ -272,7 +273,8 @@ class Project(ProjectBase, table=True):
     tags: List[Tag] = Relationship(back_populates="projects", link_model=ProjectTag)
 
 
-class ProjectReadComplete(ProjectRead):
+class ProjectReadComplete(ProjectBaseFlat):
+    id: int
     project_type: Optional[ProjectTypeRead] = None
     difficulty_level: Optional[DifficultyLevelRead] = None
     tags: List[TagRead] = []
@@ -280,10 +282,12 @@ class ProjectReadComplete(ProjectRead):
 
 
 # --- Core Entity: Course ---
-class CourseBase(SQLModel):
-    title: str = Field(min_length=3)
-    year: int = Field(index=True)
+class CourseBaseFlat(SQLModel):
+    year: int
     url: Optional[str] = None
+
+
+class CourseBase(CourseBaseFlat):
     academy_id: int = Field(foreign_key="portfolio_academy.id")
     category_id: int = Field(foreign_key="portfolio_category.id")
 
@@ -293,7 +297,6 @@ class CourseCreate(CourseBase):
 
 
 class CourseUpdate(SQLModel):
-    title: Optional[str] = None
     year: Optional[int] = None
     url: Optional[str] = None
     academy_id: Optional[int] = None
@@ -313,7 +316,8 @@ class Course(CourseBase, table=True):
     translations: List[CourseTranslation] = Relationship(back_populates="course", cascade_delete=True)
 
 
-class CourseReadComplete(CourseRead):
+class CourseReadComplete(CourseBaseFlat):
+    id: int
     academy: Optional[AcademyRead] = None
     category: Optional[CategoryRead] = None
     tags: List[TagRead] = []
@@ -321,10 +325,13 @@ class CourseReadComplete(CourseRead):
 
 
 # --- Core Entity: Certification ---
-class CertificationBase(SQLModel):
-    year: int = Field(index=True)
-    validation_serial: Optional[str] = Field(default=None, unique=True)
+class CertificationBaseFlat(SQLModel):
+    year: int
+    validation_serial: Optional[str] = None
     url: Optional[str] = None
+
+
+class CertificationBase(CertificationBaseFlat):
     academy_id: int = Field(foreign_key="portfolio_academy.id")
     category_id: int = Field(foreign_key="portfolio_category.id")
 
@@ -354,8 +361,9 @@ class Certification(CertificationBase, table=True):
     tags: List[Tag] = Relationship(back_populates="certifications", link_model=CertificationTag)
 
 
-class CertificationReadComplete(CertificationRead):
+class CertificationReadComplete(CertificationBaseFlat):
+    id: int
     academy: Optional[AcademyRead] = None
     category: Optional[CategoryRead] = None
-    translations: List[CertificationTranslationRead] = []
     tags: List[TagRead] = []
+    translations: List[CertificationTranslationRead] = []

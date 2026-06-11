@@ -10,7 +10,9 @@ from api.security import validate_api_key
 
 router = APIRouter()
 
-@router.post("/project", response_model=Project, status_code=status.HTTP_201_CREATED, dependencies=[Depends(validate_api_key)])
+
+@router.post("/project", response_model=Project, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(validate_api_key)])
 async def create_project(project_data: ProjectCreate, db: SessionDep):
     new_project = Project.model_validate(project_data.model_dump())
     db.add(new_project)
@@ -18,9 +20,6 @@ async def create_project(project_data: ProjectCreate, db: SessionDep):
     db.refresh(new_project)
     return new_project
 
-@router.get("/project", response_model=List[Project])
-async def list_project(db: SessionDep):
-    return db.exec(select(Project)).all()
 
 @router.get("/project/{project_id}", response_model=Project)
 async def get_project(project_id: int, db: SessionDep):
@@ -30,7 +29,7 @@ async def get_project(project_id: int, db: SessionDep):
     return project
 
 
-@router.get("/projects_by", response_model=List[ProjectReadComplete])
+@router.get("/projects", response_model=List[ProjectReadComplete])
 def get_projects(
         db: SessionDep,
         search: Optional[str] = Query(None, description="Buscar por título del proyecto"),
@@ -63,6 +62,7 @@ def get_projects(
 
     return db.exec(query).all()
 
+
 @router.patch("/project/{project_id}", response_model=Project, dependencies=[Depends(validate_api_key)])
 async def update_project(project_id: int, project_data: ProjectUpdate, db: SessionDep):
     project = db.get(Project, project_id)
@@ -76,7 +76,9 @@ async def update_project(project_id: int, project_data: ProjectUpdate, db: Sessi
     db.refresh(project)
     return project
 
-@router.delete("/project/{project_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(validate_api_key)])
+
+@router.delete("/project/{project_id}", status_code=status.HTTP_204_NO_CONTENT,
+               dependencies=[Depends(validate_api_key)])
 async def delete_project(project_id: int, db: SessionDep):
     project = db.get(Project, project_id)
     if not project:

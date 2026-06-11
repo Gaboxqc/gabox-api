@@ -19,11 +19,6 @@ async def create_certification(certification_data: CertificationCreate, db: Sess
     return new_certification
 
 
-@router.get("/certification", response_model=List[Certification])
-async def list_certifications(db: SessionDep, offset: int = 0, limit: int = Query(default=10)):
-    return db.exec(select(Certification).offset(offset).limit(limit)).all()
-
-
 @router.get("/certification/{certification_id}", response_model=Certification)
 async def get_certification(certification_id: int, db: SessionDep):
     certification = db.get(Certification, certification_id)
@@ -33,7 +28,7 @@ async def get_certification(certification_id: int, db: SessionDep):
     return certification
 
 
-@router.get("/certifications_by", response_model=List[CertificationReadComplete])
+@router.get("/certifications", response_model=List[CertificationReadComplete])
 def get_certifications(
         db: SessionDep,
         year: Optional[int] = Query(None, description="Filtrar por Año de emisión"),
