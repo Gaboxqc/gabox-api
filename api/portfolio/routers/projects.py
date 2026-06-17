@@ -34,7 +34,7 @@ def get_projects(
         db: SessionDep,
         search: Optional[str] = Query(None, description="Buscar por título del proyecto"),
         project_type_id: Optional[int] = Query(None, description="Filtrar por Tipo de Proyecto"),
-        difficulty_id: Optional[int] = Query(None, description="Filtrar por Nivel de Dificultad"),
+        difficulty_level_id: Optional[int] = Query(None, description="Filtrar por Nivel de Dificultad"),
         tag_id: Optional[int] = Query(None, description="Filtrar por ID de Tecnología (Tag)"),
 ):
     query = select(Project)
@@ -47,8 +47,8 @@ def get_projects(
     if project_type_id:
         query = query.where(Project.project_type_id == project_type_id)
 
-    if difficulty_id:
-        query = query.where(Project.difficulty_id == difficulty_id)
+    if difficulty_level_id:
+        query = query.where(Project.difficulty_level_id == difficulty_level_id)
 
     if tag_id:
         query = query.where(Project.tags.any(Tag.id == tag_id))
