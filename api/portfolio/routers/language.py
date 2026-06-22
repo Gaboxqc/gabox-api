@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
@@ -36,7 +38,7 @@ async def create_language(
 async def list_languages(
     db: SessionDep,
     offset: int = 0,
-    limit: int = Query(default=10, le=100),
+    limit: Annotated[int, Query(le=100)] = 10,
 ):
     return db.exec(select(Language).offset(offset).limit(limit)).all()
 
@@ -60,6 +62,9 @@ async def delete_language(code: str, db: SessionDep):
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete language: it is linked to active translations (RESTRICT constraint).",
+            detail=(
+                "Cannot delete language: it is linked to active translations (RESTRICT constraint)."
+            ),
         )
+
     return None

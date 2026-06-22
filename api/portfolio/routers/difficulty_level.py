@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import select
 
@@ -29,7 +31,7 @@ async def create_difficulty_level(
 async def list_difficulty_levels(
     db: SessionDep,
     offset: int = 0,
-    limit: int = Query(default=10, le=100),
+    limit: Annotated[int, Query(le=100)] = 10,
 ):
     return db.exec(select(DifficultyLevel).offset(offset).limit(limit)).all()
 

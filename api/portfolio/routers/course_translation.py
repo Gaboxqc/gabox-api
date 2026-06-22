@@ -1,3 +1,5 @@
+from typing import Annotated, Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import select
 
@@ -13,7 +15,7 @@ from api.security import validate_api_key
 router = APIRouter()
 
 
-def _get_or_404(course_id: int, language_code: str, db: SessionDep) -> CourseTranslation:
+def _get_or_404(course_id: int, language_code: str, db: SessionDep) -> Any | None:
     translation = db.exec(
         select(CourseTranslation).where(
             CourseTranslation.course_id == course_id,
@@ -74,7 +76,7 @@ async def list_course_translations(
     course_id: int,
     db: SessionDep,
     offset: int = 0,
-    limit: int = Query(default=10, le=100),
+    limit: Annotated[int, Query(le=100)] = 10,
 ):
     if not db.get(Course, course_id):
         raise HTTPException(

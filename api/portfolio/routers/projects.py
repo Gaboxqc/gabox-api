@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -57,14 +59,25 @@ async def get_project(project_id: int, db: SessionDep):
 @router.get("/projects", response_model=list[ProjectReadComplete])
 async def get_projects(
     db: SessionDep,
-    is_main: bool | None = Query(None, description="Filter featured projects only"),
-    search: str | None = Query(None, description="Search by project title"),
-    project_type_id: list[int] = Query(default=[], description="Filter by project type ID"),
-    difficulty_level_id: list[int] = Query(default=[], description="Filter by difficulty level ID"),
-    tag_id: list[int] = Query(default=[], description="Filter by tag ID"),
+    is_main: Annotated[bool | None, Query(description="Filter featured projects only")] = None,
+    search: Annotated[str | None, Query(description="Search by project title")] = None,
+    project_type_id: Annotated[
+        list[int] | None, Query(description="Filter by project type ID")
+    ] = None,
+    difficulty_level_id: Annotated[
+        list[int] | None, Query(description="Filter by difficulty level ID")
+    ] = None,
+    tag_id: Annotated[list[int] | None, Query(description="Filter by tag ID")] = None,
     offset: int = 0,
-    limit: int = Query(default=10, le=100),
+    limit: Annotated[int, Query(le=100)] = 10,
 ):
+    if project_type_id is None:
+        project_type_id = []
+    if difficulty_level_id is None:
+        difficulty_level_id = []
+    if tag_id is None:
+        tag_id = []
+
     query = select(Project)
 
     if is_main is not None:

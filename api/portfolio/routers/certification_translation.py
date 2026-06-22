@@ -1,3 +1,5 @@
+from typing import Annotated, Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import select
 
@@ -13,9 +15,7 @@ from api.security import validate_api_key
 router = APIRouter()
 
 
-def _get_or_404(
-    certification_id: int, language_code: str, db: SessionDep
-) -> CertificationTranslation:
+def _get_or_404(certification_id: int, language_code: str, db: SessionDep) -> Any | None:
     translation = db.exec(
         select(CertificationTranslation).where(
             CertificationTranslation.certification_id == certification_id,
@@ -25,7 +25,7 @@ def _get_or_404(
     if not translation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Translation for certification {certification_id} in '{language_code}' not found",
+            detail=f"Translation for certification {certification_id} in '{language_code}' not found",  # noqa: E501
         )
     return translation
 
@@ -76,7 +76,7 @@ async def list_certification_translations(
     certification_id: int,
     db: SessionDep,
     offset: int = 0,
-    limit: int = Query(default=10, le=100),
+    limit: Annotated[int, Query(le=100)] = 10,
 ):
     if not db.get(Certification, certification_id):
         raise HTTPException(

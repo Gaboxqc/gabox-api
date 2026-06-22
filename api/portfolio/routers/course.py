@@ -1,3 +1,5 @@
+from typing import Annotated, Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import joinedload, selectinload
 from sqlmodel import select
@@ -9,8 +11,7 @@ from api.security import validate_api_key
 router = APIRouter()
 
 
-def _load_course(course_id: int, db: SessionDep) -> CourseReadComplete:
-    """Fetch a single course with all relations loaded."""
+def _load_course(course_id: int, db: SessionDep) -> Any | None:
     course = db.exec(
         select(Course)
         .where(Course.id == course_id)
@@ -51,11 +52,16 @@ async def get_course(course_id: int, db: SessionDep):
 @router.get("/courses", response_model=list[CourseReadComplete])
 async def get_courses(
     db: SessionDep,
-    category_id: list[int] = Query(default=[], description="Filter by category ID"),
-    tag_id: list[int] = Query(default=[], description="Filter by tag ID"),
+    category_id: Annotated[list[int] | None, Query(description="Filter by category ID")] = None,
+    tag_id: Annotated[list[int] | None, Query(description="Filter by tag ID")] = None,
     offset: int = 0,
-    limit: int = Query(default=10, le=100),
+    limit: Annotated[int, Query(le=100)] = 10,
 ):
+    if category_id is None:
+        category_id = []
+    if tag_id is None:
+        tag_id = []
+
     query = select(Course).distinct()
 
     if category_id:

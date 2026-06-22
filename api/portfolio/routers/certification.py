@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -56,13 +58,15 @@ async def get_certification(certification_id: int, db: SessionDep):
 @router.get("/certifications", response_model=list[CertificationReadComplete])
 async def get_certifications(
     db: SessionDep,
-    year: int | None = Query(None, description="Filter by year of issue"),
-    academy_id: int | None = Query(None, description="Filter by academy ID"),
-    category_id: int | None = Query(None, description="Filter by category ID"),
-    tag_id: list[int] = Query(default=[], description="Filter by tag ID"),
+    year: Annotated[int | None, Query(description="Filter by year of issue")] = None,
+    academy_id: Annotated[int | None, Query(description="Filter by academy ID")] = None,
+    category_id: Annotated[int | None, Query(description="Filter by category ID")] = None,
+    tag_id: Annotated[list[int] | None, Query(description="Filter by tag ID")] = None,
     offset: int = 0,
-    limit: int = Query(default=10, le=100),
+    limit: Annotated[int, Query(le=100)] = 10,
 ):
+    if tag_id is None:
+        tag_id = []
     query = select(Certification)
 
     if year:

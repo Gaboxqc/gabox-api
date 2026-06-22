@@ -2,80 +2,71 @@
 target-version = "py312"
 line-length = 100
 
-# Directories Ruff should never touch
 exclude = [
     ".git",
     ".venv",
     "__pycache__",
-    "alembic/versions",   # auto-generated migrations
-    "alembic/env.py",     # alembic boilerplate
+    "alembic/versions",
+    "alembic/env.py",
 ]
 
-# ==============================================================================
-# LINTER
-# ==============================================================================
 [tool.ruff.lint]
 select = [
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "F",    # pyflakes (unused imports, undefined names, etc.)
-    "I",    # isort (import ordering)
-    "N",    # pep8-naming conventions
-    "UP",   # pyupgrade (modernize syntax: Union[X, Y] → X | Y, etc.)
-    "B",    # flake8-bugbear (common bug patterns)
-    "A",    # flake8-builtins (don't shadow builtins like `id`, `type`, `list`)
-    "C4",   # flake8-comprehensions (prefer list/dict comprehensions)
-    "S",    # flake8-bandit (security checks)
-    "RUF",  # Ruff-specific rules
-    "FAST", # FastAPI-specific rules (async endpoints, dependency patterns)
-    "TC",   # flake8-type-checking (move type-only imports into TYPE_CHECKING block)
-    "SIM",  # flake8-simplify (simplifiable conditions)
-    "PIE",  # flake8-pie (misc improvements)
-    "T20",  # flake8-print (flag leftover print() calls)
+    "E", # pycodestyle errors
+    "W", # pycodestyle warnings
+    "F", # pyflakes (genuine code bugs, like undefined variables)
+    "I", # isort (keeps your imports beautiful and organized)
+    "N", # pep8-naming
+    "UP", # pyupgrade
+    "B", # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "S", # flake8-bandit
+    "RUF", # Ruff-specific rules
+    "FAST", # FastAPI-specific rules
+    "SIM", # flake8-simplify
+    "PIE", # flake8-pie
 ]
 
 ignore = [
+    "S101", # assert statements are fine in tests
+    "B008", # FastAPI Depends() function calls in default args
+    "B904", # raise ... from ... inside except
+    "N999", # module names with hyphens
+    "UP007", # Keep Optional[] syntax for SQLModel compatibility
+    "SIM108", # ternary over if/else is subjective
+    "PIE790", # unnecessary pass is fine
+
     # ==================================================================
-    # Conflicts / too strict for a small API
+    # NEW FRIENDLY ADDITIONS
     # ==================================================================
-    "S101",   # assert statements are fine in tests
-    "B008",   # FastAPI uses function calls in default args (Depends, Query, etc.)
-    "B904",   # raise ... from ... inside except — noisy for HTTP exceptions
-    "N999",   # module names with hyphens — not applicable
-    "UP007",  # X | Y syntax requires SQLModel annotation support — keep Optional[]
-    "TC001",  # SQLModel and FastAPI types must be available at runtime, not just TYPE_CHECKING
-    "TC002",
-    "TC003",
-    "SIM108", # ternary over if/else — subjective
-    "PIE790", # unnecessary pass — sometimes clarifies intent in base classes
+    "S311", # Stop flagging standard library 'random' as a security risk
+    "S104", # Stop flagging '0.0.0.0' binding (standard for local docker/uvicorn)
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests can use assert and don't need bandit security checks
 "tests/**/*.py" = ["S", "T20"]
-# Scripts / one-off utilities can print
 "scripts/**/*.py" = ["T20"]
 
 [tool.ruff.lint.isort]
-# Group imports: stdlib → third-party → local (fastapi/sqlmodel → api.*)
 known-first-party = ["api"]
 known-third-party = ["fastapi", "sqlmodel", "sqlalchemy", "pydantic", "alembic"]
 force-sort-within-sections = true
 split-on-trailing-comma = true
 
 [tool.ruff.lint.pep8-naming]
-# Allow common FastAPI patterns like `router = APIRouter()`
 classmethod-decorators = ["classmethod", "validator", "model_validator"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Security"]
 
-# ==============================================================================
-# FORMATTER  (replaces Black)
-# ==============================================================================
 [tool.ruff.format]
-quote-style = "double"          # PEP 8 preference; Black default
-indent-style = "space"
+quote-style = "double"
 skip-magic-trailing-comma = false
 line-ending = "auto"
-docstring-code-format = true    # also format code blocks inside docstrings
+docstring-code-format = true
+
+indent-style = "space"
+
+# Like Black, it automatically handles blank lines around classes/functions.
+# You can enable preview mode to test upcoming formatting adjustments.
+preview = false
