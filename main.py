@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import create_db_and_tables
 from api.portfolio.routers import portfolio_router
+from api.statpitch.routers.predictions import router as statpitch_router
 
 
 @asynccontextmanager
@@ -34,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(portfolio_router, prefix="/portfolio")
+app.include_router(statpitch_router, prefix="/statpitch", tags=["StatPitch: Predictions"])
 
 
 @app.get("/")
