@@ -11,6 +11,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "alembic>=1.18.4",
     "pydantic>=2.13.4",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
