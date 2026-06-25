@@ -11,15 +11,5 @@
       "src": "/(.*)",
       "dest": "main.py"
     }
-  ],
-  "crons": [
-    {
-      "path": "/statpitch/predictions/check-results",
-      "schedule": "0 * * * *"
-    },
-    {
-      "path": "/statpitch/predictions/sync-tomorrow",
-      "schedule": "0 6 * * *"
-    }
   ]
 }

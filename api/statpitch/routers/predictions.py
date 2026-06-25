@@ -19,6 +19,7 @@ from api.statpitch.models import (
     SyncResultRead,
 )
 from api.statpitch.odds_service import MatchOdds, fetch_todays_odds
+from api.statpitch.scheduler import check_and_record_results, sync_tomorrow
 
 router = APIRouter()
 
