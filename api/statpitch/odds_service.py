@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -44,10 +44,13 @@ class MatchOdds:
 
 _TEAM_NAME_MAP: dict[str, str] = {
     "Bosnia & Herzegovina": "Bosnia and Herzegovina",
+    "Türkiye": "Turkey",
     "Korea Republic": "South Korea",
     "IR Iran": "Iran",
     "USA": "United States",
     "Côte d'Ivoire": "Ivory Coast",
+    "Cabo Verde": "Cape Verde",
+    "Congo DR": "DR Congo",
 }
 
 
@@ -57,64 +60,71 @@ def _normalize_team_name(name: str) -> str:
 
 def _team_to_flag_url(team_name: str) -> str:
     FLAG_MAP: dict[str, str] = {
+        # ── CONMEBOL (6) ──────────────────────────────────────────────────────
         "argentina": "ar",
-        "australia": "au",
+        "brazil": "br",
+        "colombia": "co",
+        "ecuador": "ec",
+        "paraguay": "py",
+        "uruguay": "uy",
+        # ── CONCACAF (6) ─────────────────────────────────────────────────────
+        "canada": "ca",
+        "mexico": "mx",
+        "united states": "us",
+        "usa": "us",
+        "curaçao": "cw",
+        "curacao": "cw",
+        "haiti": "ht",
+        "panama": "pa",
+        # ── UEFA (16) ─────────────────────────────────────────────────────────
         "austria": "at",
         "belgium": "be",
         "bosnia and herzegovina": "ba",
-        "brazil": "br",
-        "cameroon": "cm",
-        "canada": "ca",
-        "chile": "cl",
-        "colombia": "co",
-        "costa rica": "cr",
+        "bosnia & herzegovina": "ba",
         "croatia": "hr",
-        "czech republic": "cz",
         "czechia": "cz",
-        "denmark": "dk",
-        "ecuador": "ec",
-        "egypt": "eg",
+        "czech republic": "cz",
         "england": "gb-eng",
         "france": "fr",
         "germany": "de",
-        "ghana": "gh",
-        "greece": "gr",
-        "hungary": "hu",
-        "iran": "ir",
-        "italy": "it",
-        "ivory coast": "ci",
-        "japan": "jp",
-        "south korea": "kr",
-        "mexico": "mx",
-        "morocco": "ma",
         "netherlands": "nl",
-        "new zealand": "nz",
-        "nigeria": "ng",
         "norway": "no",
-        "panama": "pa",
-        "paraguay": "py",
-        "peru": "pe",
-        "poland": "pl",
         "portugal": "pt",
-        "qatar": "qa",
-        "romania": "ro",
-        "saudi arabia": "sa",
         "scotland": "gb-sct",
-        "senegal": "sn",
-        "serbia": "rs",
-        "slovakia": "sk",
-        "slovenia": "si",
-        "south africa": "za",
         "spain": "es",
         "sweden": "se",
         "switzerland": "ch",
-        "tunisia": "tn",
+        "türkiye": "tr",
         "turkey": "tr",
-        "ukraine": "ua",
-        "united states": "us",
-        "uruguay": "uy",
-        "venezuela": "ve",
-        "wales": "gb-wls",
+        # ── AFC (9) ───────────────────────────────────────────────────────────
+        "australia": "au",
+        "iraq": "iq",
+        "iran": "ir",
+        "ir iran": "ir",
+        "japan": "jp",
+        "jordan": "jo",
+        "south korea": "kr",
+        "korea republic": "kr",
+        "qatar": "qa",
+        "saudi arabia": "sa",
+        "uzbekistan": "uz",
+        # ── CAF (10) ──────────────────────────────────────────────────────────
+        "algeria": "dz",
+        "cabo verde": "cv",
+        "cape verde": "cv",
+        "dr congo": "cd",
+        "congo dr": "cd",
+        "ivory coast": "ci",
+        "côte d'ivoire": "ci",
+        "cote d'ivoire": "ci",
+        "egypt": "eg",
+        "ghana": "gh",
+        "morocco": "ma",
+        "senegal": "sn",
+        "south africa": "za",
+        "tunisia": "tn",
+        # ── OFC (1) ───────────────────────────────────────────────────────────
+        "new zealand": "nz",
     }
     code = FLAG_MAP.get(team_name.lower())
     return f"https://flagcdn.com/{code}.svg" if code else ""

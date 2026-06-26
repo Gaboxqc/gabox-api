@@ -1,6 +1,7 @@
 import asyncio
 import os
-from datetime import date, timedelta
+from datetime import date
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 import httpx
@@ -40,6 +41,12 @@ MIN_KELLY = 0.02
 # ==============================================================================
 # MATH HELPERS
 # ==============================================================================
+
+
+def _today_nicaragua() -> date:
+    """Nicaragua is UTC-6, no daylight saving."""
+    nicaragua = timezone(timedelta(hours=-6))
+    return datetime.now(nicaragua).date()
 
 
 def _ev(prob: float, odds: float) -> float:
@@ -469,7 +476,7 @@ async def trigger_sync_tomorrow():
     summary="Stats bar — predictions today, high confidence, value bets, 30d accuracy, 30d ROI",
 )
 async def get_stats(db: SessionDep):
-    today = date.today()
+    today = _today_nicaragua()
     cutoff = today - timedelta(days=30)
 
     today_preds = db.exec(select(MatchPrediction).where(MatchPrediction.match_date == today)).all()
@@ -526,7 +533,7 @@ async def get_stats(db: SessionDep):
 async def get_today_predictions(db: SessionDep):
     predictions = db.exec(
         select(MatchPrediction)
-        .where(MatchPrediction.match_date == date.today())
+        .where(MatchPrediction.match_date == _today_nicaragua())
         .order_by(MatchPrediction.id)
     ).all()
     if not predictions:
@@ -544,7 +551,7 @@ async def get_today_predictions(db: SessionDep):
 )
 async def get_best_prediction_today(db: SessionDep):
     predictions = db.exec(
-        select(MatchPrediction).where(MatchPrediction.match_date == date.today())
+        select(MatchPrediction).where(MatchPrediction.match_date == _today_nicaragua())
     ).all()
     if not predictions:
         raise HTTPException(
@@ -566,7 +573,7 @@ async def get_best_prediction_today(db: SessionDep):
 async def get_value_bets_today(db: SessionDep):
     predictions = db.exec(
         select(MatchPrediction).where(
-            MatchPrediction.match_date == date.today(),
+            MatchPrediction.match_date == _today_nicaragua(),
             MatchPrediction.best_overall_bet.is_not(None),
         )
     ).all()
