@@ -203,6 +203,7 @@ def _ml_to_db(
 ) -> MatchPrediction:
     prediction = MatchPrediction(
         match_date=target_date,
+        commence_time=odds.commence_time,
         home_team=ml.home_team,
         away_team=ml.away_team,
         is_neutral=is_neutral,

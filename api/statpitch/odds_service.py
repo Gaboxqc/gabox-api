@@ -1,3 +1,4 @@
+import logging
 import os
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -6,6 +7,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import HTTPException, status
+
+log = logging.getLogger("statpitch.odds_service")
 
 _ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 _DEFAULT_SPORT = "soccer_fifa_world_cup"
@@ -19,6 +22,7 @@ class MatchOdds:
     home_team: str
     away_team: str
     match_date: date
+    commence_time: Optional[datetime] = None
 
     # 1X2
     odds_home: Optional[float] = None
@@ -168,10 +172,6 @@ def _parse_h2h(
 
 
 def _parse_totals(bookmakers: list[dict]) -> dict[str, Optional[float]]:
-    """
-    Parse over/under odds for 1.5, 2.5, 3.5 goal lines.
-    Returns a dict keyed by e.g. "over_1_5", "under_2_5".
-    """
     buckets: dict[str, list[float]] = {
         "over_1_5": [],
         "under_1_5": [],
@@ -189,8 +189,8 @@ def _parse_totals(bookmakers: list[dict]) -> dict[str, Optional[float]]:
             if market.get("key") != "totals":
                 continue
             for outcome in market.get("outcomes", []):
-                name = outcome.get("name", "").lower()  # "over" or "under"
-                point = outcome.get("point")  # 1.5, 2.5, 3.5
+                name = outcome.get("name", "").lower()
+                point = outcome.get("point")
                 price = outcome.get("price", 0.0)
                 if point not in (1.5, 2.5, 3.5):
                     continue
@@ -224,6 +224,24 @@ def _parse_btts(bookmakers: list[dict]) -> tuple[Optional[float], Optional[float
     return yes, no
 
 
+def _merge_bookmakers(existing: dict, new_event: dict) -> None:
+    """
+    Merge bookmaker market data from new_event into existing in-place.
+    Each market (h2h, totals, btts) comes from a separate API call —
+    this combines them so all three are available on a single event dict.
+    """
+    existing_bms = {bm["key"]: bm for bm in existing.get("bookmakers", [])}
+
+    for bm in new_event.get("bookmakers", []):
+        key = bm["key"]
+        if key in existing_bms:
+            existing_bms[key]["markets"].extend(bm.get("markets", []))
+        else:
+            existing_bms[key] = bm
+
+    existing["bookmakers"] = list(existing_bms.values())
+
+
 async def fetch_todays_odds() -> list[MatchOdds]:
     api_key = os.getenv("ODDS_API_KEY", "")
     if not api_key:
@@ -234,12 +252,13 @@ async def fetch_todays_odds() -> list[MatchOdds]:
 
     sport = os.getenv("ODDS_API_SPORT", _DEFAULT_SPORT)
     region = os.getenv("ODDS_API_REGION", _DEFAULT_REGION)
+
     target_tz = ZoneInfo("America/Managua")
     today_local = datetime.now(target_tz).date()
 
     async with httpx.AsyncClient(timeout=30.0) as client:
 
-        # Step 1 — all fixtures (including those without odds yet)
+        # ── Step 1: all fixtures for today (no odds yet, just schedule) ───────
         try:
             events_resp = await client.get(
                 f"{_ODDS_API_BASE}/sports/{sport}/events/",
@@ -250,35 +269,48 @@ async def fetch_todays_odds() -> list[MatchOdds]:
             raise HTTPException(status_code=504, detail="The Odds API timed out.")
         except httpx.HTTPStatusError as exc:
             raise HTTPException(
-                status_code=502, detail=f"The Odds API returned HTTP {exc.response.status_code}."
+                status_code=502,
+                detail=f"The Odds API returned HTTP {exc.response.status_code}.",
             )
         except httpx.RequestError as exc:
             raise HTTPException(status_code=502, detail=f"Could not reach The Odds API: {exc}")
 
-        # Step 2 — odds across all three markets in one call
+        # ── Step 2: fetch each market separately ──────────────────────────────
+        # Splitting into three calls means one unsupported market (e.g. btts)
+        # won't silently kill the entire odds response.
         odds_by_id: dict[str, dict] = {}
-        try:
-            odds_resp = await client.get(
-                f"{_ODDS_API_BASE}/sports/{sport}/odds/",
-                params={
-                    "apiKey": api_key,
-                    "regions": region,
-                    "markets": "h2h,totals,btts",  # ← all three markets
-                    "oddsFormat": "decimal",
-                },
-            )
-            odds_resp.raise_for_status()
-            for event in odds_resp.json():
-                odds_by_id[event["id"]] = event
-        except Exception:
-            pass  # odds unavailable — still proceed with fixtures
 
+        for market in ["h2h", "totals", "btts"]:
+            region_for_market = "uk" if market == "btts" else region
+            try:
+                resp = await client.get(
+                    f"{_ODDS_API_BASE}/sports/{sport}/odds/",
+                    params={
+                        "apiKey": api_key,
+                        "regions": region_for_market,
+                        "markets": market,
+                        "oddsFormat": "decimal",
+                    },
+                )
+                resp.raise_for_status()
+                for event in resp.json():
+                    event_id = event["id"]
+                    if event_id not in odds_by_id:
+                        odds_by_id[event_id] = event
+                    else:
+                        _merge_bookmakers(odds_by_id[event_id], event)
+                log.info(f"✅ {market} odds fetched for {len(resp.json())} events.")
+            except Exception as e:
+                # Log and continue — other markets are still usable
+                log.warning(f"⚠️  Could not fetch '{market}' odds: {e}")
+
+    # ── Step 3: build MatchOdds for each event scheduled today ───────────────
     results: list[MatchOdds] = []
 
     for event in events_resp.json():
         commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+        match_date_local = commence_time.astimezone(target_tz).date()
         match_time_local = commence_time.astimezone(target_tz)
-        match_date_local = match_time_local.date()
 
         if match_date_local != today_local:
             continue
@@ -297,6 +329,7 @@ async def fetch_todays_odds() -> list[MatchOdds]:
                 home_team=home_team,
                 away_team=away_team,
                 match_date=today_local,
+                commence_time=match_time_local,
                 odds_home=odds_home,
                 odds_draw=odds_draw,
                 odds_away=odds_away,
