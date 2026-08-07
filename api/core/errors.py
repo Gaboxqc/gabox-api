@@ -52,8 +52,15 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
         if constraint:
             detail = f"{detail} Violated constraint: {constraint}."
     elif code == _FOREIGN_KEY_VIOLATION:
-        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        detail = "A referenced record does not exist, or is still in use by another record."
+        # Same SQLSTATE, opposite meaning depending on direction: writing a row
+        # that points at something missing is a bad payload (422); deleting a
+        # row something else still points at is a state conflict (409).
+        if request.method == "DELETE":
+            status_code = status.HTTP_409_CONFLICT
+            detail = "This record is still referenced by other records and cannot be deleted."
+        else:
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+            detail = "A referenced record does not exist."
         if constraint:
             detail = f"{detail} Violated constraint: {constraint}."
     elif code == _NOT_NULL_VIOLATION:

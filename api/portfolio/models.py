@@ -51,6 +51,10 @@ class ProjectTypeCreate(ProjectTypeBase):
     pass
 
 
+class ProjectTypeUpdate(SQLModel):
+    name: str | None = None
+
+
 class ProjectTypeRead(ProjectTypeBase):
     id: int
 
@@ -70,6 +74,10 @@ class DifficultyLevelCreate(DifficultyLevelBase):
     pass
 
 
+class DifficultyLevelUpdate(SQLModel):
+    name: str | None = None
+
+
 class DifficultyLevelRead(DifficultyLevelBase):
     id: int
 
@@ -87,6 +95,10 @@ class CategoryBase(SQLModel):
 
 class CategoryCreate(CategoryBase):
     pass
+
+
+class CategoryUpdate(SQLModel):
+    name: str | None = None
 
 
 class CategoryRead(CategoryBase):
@@ -110,16 +122,33 @@ class LanguageCreate(LanguageBase):
     pass
 
 
+class LanguageUpdate(SQLModel):
+    # `code` is the primary key and stays immutable.
+    name: str | None = None
+
+
 class LanguageRead(LanguageBase):
     pass
 
 
+# `language_code` is part of each translation's composite primary key, so the
+# ORM's default "null out the child FK on delete" is impossible and raises an
+# AssertionError before the database's RESTRICT is ever reached. Handing the
+# decision to the database lets it reject the delete properly, as a 409.
+_DEFER_TO_DB = {"passive_deletes": "all"}
+
+
 class Language(LanguageBase, table=True):
     __tablename__: str = "portfolio_language"
-    project_translations: list["ProjectTranslation"] = Relationship(back_populates="language")
-    course_translations: list["CourseTranslation"] = Relationship(back_populates="language")
+
+    project_translations: list["ProjectTranslation"] = Relationship(
+        back_populates="language", sa_relationship_kwargs=_DEFER_TO_DB
+    )
+    course_translations: list["CourseTranslation"] = Relationship(
+        back_populates="language", sa_relationship_kwargs=_DEFER_TO_DB
+    )
     certification_translations: list["CertificationTranslation"] = Relationship(
-        back_populates="language"
+        back_populates="language", sa_relationship_kwargs=_DEFER_TO_DB
     )
 
 
