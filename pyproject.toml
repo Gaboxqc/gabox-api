@@ -8,9 +8,11 @@ dependencies = [
     "sqlmodel>=0.0.38",
     "sqlalchemy>=2.0.50",
     "psycopg2-binary>=2.9.12",
-    "python-dotenv>=1.2.2",
     "alembic>=1.18.4",
     "pydantic>=2.13.4",
+    "pydantic-settings>=2.7.0",
+    # Imported directly by alembic/env.py, which stays independent of app settings.
+    "python-dotenv>=1.2.2",
     "httpx>=0.28.1",
 ]
 

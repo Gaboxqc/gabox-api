@@ -2,32 +2,33 @@ from logging.config import fileConfig
 from os import getenv
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
+from sqlmodel import SQLModel
 
-from api.database import SQLModel
-
-# Import ALL table models so Alembic can detect them
-from api.portfolio.models import (  # noqa: F401
-    ProjectType,
-    DifficultyLevel,
-    Category,
-    Language,
-    Project,
-    ProjectTranslation,
-    Certification,
-    Course,
-)
-from api.statpitch.models import MatchPrediction  # noqa: F401
+# Importing these modules registers every table on SQLModel.metadata, which is
+# what autogenerate diffs against. A module missing here reads as "table was
+# deleted" and autogenerate will happily write a DROP TABLE for it.
+import api.portfolio.models  # noqa: F401
+import api.statpitch.models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
+# Deliberately not importing api.core.config: a migration needs a database URL
+# and nothing else. Routing through app settings would make `alembic upgrade`
+# fail wherever an unrelated key such as API_MASTER_KEY is absent (CI, a
+# release hook), and would build an application engine that goes unused.
+load_dotenv()
 database_url = getenv("DATABASE_URL")
+if not database_url:
+    raise RuntimeError("DATABASE_URL is not set — Alembic has no database to connect to.")
 
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+# `%` is ConfigParser's interpolation marker, so a password containing one
+# would blow up here rather than in the connection.
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

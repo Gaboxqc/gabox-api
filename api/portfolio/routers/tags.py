@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 
-from api.database import SessionDep
+from api.core.database import SessionDep
 from api.portfolio.models import Tag, TagCreate, TagRead, TagUpdate
-from api.security import validate_api_key
+from api.core.security import validate_api_key
 
 router = APIRouter()
 

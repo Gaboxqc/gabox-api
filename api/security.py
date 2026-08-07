@@ -1,26 +1,7 @@
-import os
+"""Deprecated — import from `api.core.security` instead.
 
-from fastapi import HTTPException, Security, status
-from fastapi.security import APIKeyHeader
+Kept only so `api/statpitch/` keeps working untouched. Delete this module
+once StatPitch is migrated to the core layer.
+"""
 
-API_KEY_NAME = "X-API-KEY"
-api_key_header = APIKeyHeader(name=API_KEY_NAME)
-
-
-def validate_api_key(api_key: str = Security(api_key_header)):
-    master_key = os.getenv("API_MASTER_KEY")
-
-    if not master_key:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server configuration error (API_MASTER_KEY is missing).",
-        )
-
-    if api_key != master_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            headers={"WWW-Authenticate": "ApiKey"},
-            detail="Invalid or missing API key.",
-        )
-
-    return api_key
+from api.core.security import API_KEY_NAME, validate_api_key  # noqa: F401
