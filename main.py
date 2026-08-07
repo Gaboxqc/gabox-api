@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.core.config import settings
 from api.core.errors import register_exception_handlers
+from api.core.health import router as health_router
 from api.core.logging import configure_logging
 from api.portfolio.routers import portfolio_router
 from api.statpitch.routers import statpitch_router
@@ -30,18 +31,9 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
 
+    app.include_router(health_router)
     app.include_router(portfolio_router, prefix="/portfolio")
     app.include_router(statpitch_router, prefix="/statpitch")
-
-    @app.get("/", tags=["Health"])
-    async def root():
-        return {
-            "status": "online",
-            "projects": {
-                "portfolio": "/portfolio",
-                "statpitch": "/statpitch",
-            },
-        }
 
     return app
 
