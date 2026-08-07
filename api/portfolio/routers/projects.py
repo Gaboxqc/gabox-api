@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import selectinload
+from fastapi import APIRouter, Depends, Query, status
 from sqlmodel import select
 
 from api.core.database import SessionDep
+from api.core.deps import PageDep, eager_options, escape_like, get_or_404, get_with_relations
+from api.core.security import validate_api_key
 from api.portfolio.models import (
     Project,
     ProjectCreate,
@@ -13,52 +14,41 @@ from api.portfolio.models import (
     ProjectUpdate,
     Tag,
 )
-from api.core.security import validate_api_key
 
-router = APIRouter()
+router = APIRouter(prefix="/projects")
+authenticated = [Depends(validate_api_key)]
+
+# Everything ProjectReadComplete nests, eager-loaded to avoid N+1 queries.
+RELATIONS = (
+    Project.project_type,
+    Project.difficulty_level,
+    Project.tags,
+    Project.translations,
+)
 
 
-def _load_project(project_id: int, db: SessionDep) -> ProjectReadComplete:
-    project = db.exec(
-        select(Project)
-        .where(Project.id == project_id)
-        .options(
-            selectinload(Project.project_type),
-            selectinload(Project.difficulty_level),
-            selectinload(Project.tags),
-            selectinload(Project.translations),
-        )
-    ).first()
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Project with id {project_id} not found",
-        )
-    return project
+def _load(db: SessionDep, project_id: int) -> Project:
+    return get_with_relations(db, Project, project_id, RELATIONS)
 
 
 @router.post(
-    "/projects",
+    "",
     response_model=ProjectReadComplete,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(validate_api_key)],
+    dependencies=authenticated,
 )
 async def create_project(project_data: ProjectCreate, db: SessionDep):
-    new_project = Project.model_validate(project_data.model_dump())
-    db.add(new_project)
+    project = Project.model_validate(project_data.model_dump())
+    db.add(project)
     db.commit()
-    db.refresh(new_project)
-    return _load_project(new_project.id, db)
+    db.refresh(project)
+    return _load(db, project.id)
 
 
-@router.get("/projects/{project_id}", response_model=ProjectReadComplete)
-async def get_project(project_id: int, db: SessionDep):
-    return _load_project(project_id, db)
-
-
-@router.get("/projects", response_model=list[ProjectReadComplete])
-async def get_projects(
+@router.get("", response_model=list[ProjectReadComplete])
+async def list_projects(
     db: SessionDep,
+    page: PageDep,
     is_main: Annotated[bool | None, Query(description="Filter featured projects only")] = None,
     search: Annotated[str | None, Query(description="Search by project title")] = None,
     project_type_id: Annotated[
@@ -68,23 +58,18 @@ async def get_projects(
         list[int] | None, Query(description="Filter by difficulty level ID")
     ] = None,
     tag_id: Annotated[list[int] | None, Query(description="Filter by tag ID")] = None,
-    offset: int = 0,
-    limit: Annotated[int, Query(le=100)] = 10,
 ):
-    if project_type_id is None:
-        project_type_id = []
-    if difficulty_level_id is None:
-        difficulty_level_id = []
-    if tag_id is None:
-        tag_id = []
-
     query = select(Project)
 
     if is_main is not None:
         query = query.where(Project.is_main == is_main)
 
     if search:
-        query = query.where(Project.translations.any(ProjectTranslation.title.ilike(f"%{search}%")))
+        query = query.where(
+            Project.translations.any(
+                ProjectTranslation.title.ilike(f"%{escape_like(search)}%", escape="\\")
+            )
+        )
 
     if project_type_id:
         query = query.where(Project.project_type_id.in_(project_type_id))
@@ -92,51 +77,39 @@ async def get_projects(
     if difficulty_level_id:
         query = query.where(Project.difficulty_level_id.in_(difficulty_level_id))
 
+    # `.any()` compiles to EXISTS, so rows are never duplicated and no DISTINCT
+    # is needed — which matters because DISTINCT fights with LIMIT/OFFSET.
     if tag_id:
         query = query.where(Project.tags.any(Tag.id.in_(tag_id)))
 
-    query = query.options(
-        selectinload(Project.project_type),
-        selectinload(Project.difficulty_level),
-        selectinload(Project.tags),
-        selectinload(Project.translations),
-    )
+    query = query.options(*eager_options(RELATIONS)).order_by(Project.id)
+    return db.exec(query.offset(page.offset).limit(page.limit)).all()
 
-    return db.exec(query.offset(offset).limit(limit)).all()
+
+@router.get("/{project_id}", response_model=ProjectReadComplete)
+async def get_project(project_id: int, db: SessionDep):
+    return _load(db, project_id)
 
 
 @router.patch(
-    "/projects/{project_id}",
+    "/{project_id}",
     response_model=ProjectReadComplete,
-    dependencies=[Depends(validate_api_key)],
+    dependencies=authenticated,
 )
 async def update_project(project_id: int, project_data: ProjectUpdate, db: SessionDep):
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Project with id {project_id} not found",
-        )
-    update_data = project_data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(project, key, value)
+    project = get_or_404(db, Project, project_id)
+    for field, value in project_data.model_dump(exclude_unset=True).items():
+        setattr(project, field, value)
     db.add(project)
     db.commit()
-    return _load_project(project_id, db)
+    return _load(db, project_id)
 
 
 @router.delete(
-    "/projects/{project_id}",
+    "/{project_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(validate_api_key)],
+    dependencies=authenticated,
 )
 async def delete_project(project_id: int, db: SessionDep):
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Project with id {project_id} not found",
-        )
-    db.delete(project)
+    db.delete(get_or_404(db, Project, project_id))
     db.commit()
-    return None

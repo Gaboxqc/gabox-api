@@ -1,119 +1,85 @@
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import joinedload, selectinload
+from fastapi import APIRouter, Depends, Query, status
 from sqlmodel import select
 
 from api.core.database import SessionDep
-from api.portfolio.models import Course, CourseCreate, CourseReadComplete, CourseTag, CourseUpdate
+from api.core.deps import PageDep, eager_options, get_or_404, get_with_relations
 from api.core.security import validate_api_key
+from api.portfolio.models import Course, CourseCreate, CourseReadComplete, CourseUpdate, Tag
 
-router = APIRouter()
+router = APIRouter(prefix="/courses")
+authenticated = [Depends(validate_api_key)]
+
+RELATIONS = (
+    Course.academy,
+    Course.category,
+    Course.tags,
+    Course.translations,
+)
 
 
-def _load_course(course_id: int, db: SessionDep) -> Any | None:
-    course = db.exec(
-        select(Course)
-        .where(Course.id == course_id)
-        .options(
-            joinedload(Course.academy),
-            joinedload(Course.category),
-            selectinload(Course.tags),
-            selectinload(Course.translations),
-        )
-    ).first()
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Course with id {course_id} not found",
-        )
-    return course
+def _load(db: SessionDep, course_id: int) -> Course:
+    return get_with_relations(db, Course, course_id, RELATIONS)
 
 
 @router.post(
-    "/courses",
+    "",
     response_model=CourseReadComplete,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(validate_api_key)],
+    dependencies=authenticated,
 )
 async def create_course(course_data: CourseCreate, db: SessionDep):
-    new_course = Course.model_validate(course_data.model_dump())
-    db.add(new_course)
+    course = Course.model_validate(course_data.model_dump())
+    db.add(course)
     db.commit()
-    db.refresh(new_course)
-    return _load_course(new_course.id, db)
+    db.refresh(course)
+    return _load(db, course.id)
 
 
-@router.get("/courses/{course_id}", response_model=CourseReadComplete)
-async def get_course(course_id: int, db: SessionDep):
-    return _load_course(course_id, db)
-
-
-@router.get("/courses", response_model=list[CourseReadComplete])
-async def get_courses(
+@router.get("", response_model=list[CourseReadComplete])
+async def list_courses(
     db: SessionDep,
+    page: PageDep,
     category_id: Annotated[list[int] | None, Query(description="Filter by category ID")] = None,
     tag_id: Annotated[list[int] | None, Query(description="Filter by tag ID")] = None,
-    offset: int = 0,
-    limit: Annotated[int, Query(le=100)] = 10,
 ):
-    if category_id is None:
-        category_id = []
-    if tag_id is None:
-        tag_id = []
-
-    query = select(Course).distinct()
+    query = select(Course)
 
     if category_id:
         query = query.where(Course.category_id.in_(category_id))
 
     if tag_id:
-        query = query.where(
-            Course.id.in_(select(CourseTag.course_id).where(CourseTag.tag_id.in_(tag_id)))
-        )
+        query = query.where(Course.tags.any(Tag.id.in_(tag_id)))
 
-    query = query.options(
-        joinedload(Course.academy),
-        joinedload(Course.category),
-        selectinload(Course.tags),
-        selectinload(Course.translations),
-    )
+    query = query.options(*eager_options(RELATIONS)).order_by(Course.id)
+    return db.exec(query.offset(page.offset).limit(page.limit)).all()
 
-    return db.exec(query.offset(offset).limit(limit)).all()
+
+@router.get("/{course_id}", response_model=CourseReadComplete)
+async def get_course(course_id: int, db: SessionDep):
+    return _load(db, course_id)
 
 
 @router.patch(
-    "/courses/{course_id}",
+    "/{course_id}",
     response_model=CourseReadComplete,
-    dependencies=[Depends(validate_api_key)],
+    dependencies=authenticated,
 )
 async def update_course(course_id: int, course_data: CourseUpdate, db: SessionDep):
-    course = db.get(Course, course_id)
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Course with id {course_id} not found",
-        )
-    update_data = course_data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(course, key, value)
+    course = get_or_404(db, Course, course_id)
+    for field, value in course_data.model_dump(exclude_unset=True).items():
+        setattr(course, field, value)
     db.add(course)
     db.commit()
-    return _load_course(course_id, db)
+    return _load(db, course_id)
 
 
 @router.delete(
-    "/courses/{course_id}",
+    "/{course_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(validate_api_key)],
+    dependencies=authenticated,
 )
 async def delete_course(course_id: int, db: SessionDep):
-    course = db.get(Course, course_id)
-    if not course:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Course with id {course_id} not found",
-        )
-    db.delete(course)
+    db.delete(get_or_404(db, Course, course_id))
     db.commit()
-    return None

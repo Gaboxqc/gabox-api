@@ -15,20 +15,10 @@ from fastapi import APIRouter, Depends, status
 from sqlmodel import SQLModel, select
 
 from api.core.database import SessionDep
-from api.core.deps import PageDep, get_or_404
+from api.core.deps import PageDep, get_or_404, primary_key_column
 from api.core.security import validate_api_key
 
 ModelT = TypeVar("ModelT", bound=SQLModel)
-
-
-def _primary_key_column(model: type[SQLModel]):
-    columns = list(model.__table__.primary_key.columns)
-    if len(columns) != 1:
-        raise TypeError(
-            f"crud_router() needs a single-column primary key; "
-            f"{model.__name__} has {len(columns)}."
-        )
-    return getattr(model, columns[0].name)
 
 
 def crud_router(
@@ -49,7 +39,7 @@ def crud_router(
     six identically-named closures.
     """
     router = APIRouter(prefix=prefix, tags=[tag])
-    pk_column = _primary_key_column(model)
+    pk_column = primary_key_column(model)
     plural = prefix.strip("/").replace("-", "_")
     authenticated = [Depends(validate_api_key)]
 
