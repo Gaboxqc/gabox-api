@@ -2,13 +2,11 @@
 
 import re
 from collections.abc import Sequence
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Query, status
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, SQLModel, select
-
-ModelT = TypeVar("ModelT", bound=SQLModel)
 
 
 class Pagination:
@@ -53,7 +51,7 @@ def eager_options(relations: Sequence[Any]) -> list[Any]:
     return [selectinload(relation) for relation in relations]
 
 
-def get_or_404(db: Session, model: type[ModelT], ident: Any) -> ModelT:
+def get_or_404[ModelT: SQLModel](db: Session, model: type[ModelT], ident: Any) -> ModelT:
     """Fetch by primary key or raise a 404 naming the resource."""
     instance = db.get(model, ident)
     if instance is None:
@@ -61,7 +59,7 @@ def get_or_404(db: Session, model: type[ModelT], ident: Any) -> ModelT:
     return instance
 
 
-def get_with_relations(
+def get_with_relations[ModelT: SQLModel](
     db: Session, model: type[ModelT], ident: Any, relations: Sequence[Any]
 ) -> ModelT:
     """`get_or_404` for models whose read schema includes nested relationships."""

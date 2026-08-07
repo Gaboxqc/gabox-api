@@ -59,12 +59,12 @@ async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSON
             status_code = status.HTTP_409_CONFLICT
             detail = "This record is still referenced by other records and cannot be deleted."
         else:
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
             detail = "A referenced record does not exist."
         if constraint:
             detail = f"{detail} Violated constraint: {constraint}."
     elif code == _NOT_NULL_VIOLATION:
-        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+        status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
         detail = "A required field was missing."
     else:
         status_code = status.HTTP_409_CONFLICT

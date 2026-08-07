@@ -1,10 +1,8 @@
 from logging.config import fileConfig
 from os import getenv
 
-from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 # Importing these modules registers every table on SQLModel.metadata, which is
@@ -12,6 +10,7 @@ from sqlmodel import SQLModel
 # deleted" and autogenerate will happily write a DROP TABLE for it.
 import api.portfolio.models  # noqa: F401
 import api.statpitch.models  # noqa: F401
+from alembic import context
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
