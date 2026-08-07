@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 
-from api.database import SessionDep
+from api.core.database import SessionDep
 from api.portfolio.models import (
     Project,
     ProjectTranslation,
     ProjectTranslationCreate,
     ProjectTranslationUpdate,
 )
-from api.security import validate_api_key
+from api.core.security import validate_api_key
 
 router = APIRouter()
 

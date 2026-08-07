@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
-from api.database import SessionDep
+from api.core.database import SessionDep
 from api.portfolio.models import (
     Certification,
     CertificationCreate,
@@ -12,7 +12,7 @@ from api.portfolio.models import (
     CertificationUpdate,
     Tag,
 )
-from api.security import validate_api_key
+from api.core.security import validate_api_key
 
 router = APIRouter()
 

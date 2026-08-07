@@ -1,59 +1,49 @@
-import logging
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.database import create_db_and_tables
+from api.core.config import settings
+from api.core.errors import register_exception_handlers
+from api.core.logging import configure_logging
 from api.portfolio.routers import portfolio_router
 from api.statpitch.routers import statpitch_router
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+
+def create_app() -> FastAPI:
+    configure_logging(settings.log_level)
+
+    app = FastAPI(
+        title="Gabox API",
+        description=(
+            "Centralized serverless backend for all my projects. "
+            "Navigate to /docs for interactive documentation."
+        ),
+        version="2.0.0",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    register_exception_handlers(app)
+
+    app.include_router(portfolio_router, prefix="/portfolio")
+    app.include_router(statpitch_router, prefix="/statpitch")
+
+    @app.get("/", tags=["Health"])
+    async def root():
+        return {
+            "status": "online",
+            "projects": {
+                "portfolio": "/portfolio",
+                "statpitch": "/statpitch",
+            },
+        }
+
+    return app
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    create_db_and_tables()
-    yield
-
-
-app = FastAPI(
-    title="Gabox API",
-    description=(
-        "Centralized serverless backend for all my projects. "
-        "Navigate to /docs for interactive documentation."
-    ),
-    version="2.0.0",
-    lifespan=lifespan,
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:8000",
-        "https://gabrielmayorga.dev",
-        "https://www.gabrielmayorga.dev",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(portfolio_router, prefix="/portfolio")
-app.include_router(statpitch_router, prefix="/statpitch")
-
-
-@app.get("/", tags=["Health"])
-async def root():
-    return {
-        "status": "online",
-        "projects": {
-            "portfolio": "/portfolio",
-            "statpitch": "/statpitch",
-        },
-    }
+app = create_app()
