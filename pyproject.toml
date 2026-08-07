@@ -19,9 +19,29 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "black>=26.5.1",
+    "ruff>=0.15.0",
+    "pytest>=8.4.0",
     "pre-commit>=4.6.0",
 ]
 
 [tool.black]
 line-length = 100
 target-version = ["py312"]
+# Kept in step with the ruff exclusions below.
+extend-exclude = "api/statpitch"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# StatPitch predates this setup and is being reworked separately; migration
+# scripts are generated. Drop these entries as each is cleaned up.
+exclude = ["api/statpitch", "alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The project is a flat layout rather than an installed package, so the repo
+# root has to be importable for `from main import app` to resolve.
+pythonpath = ["."]

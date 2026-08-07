@@ -9,8 +9,6 @@ Resources with real query logic (projects, certifications, courses) stay
 hand-written; forcing them through here would cost more than it saves.
 """
 
-from typing import TypeVar
-
 from fastapi import APIRouter, Depends, status
 from sqlmodel import SQLModel, select
 
@@ -18,10 +16,8 @@ from api.core.database import SessionDep
 from api.core.deps import PageDep, get_or_404, primary_key_column
 from api.core.security import validate_api_key
 
-ModelT = TypeVar("ModelT", bound=SQLModel)
 
-
-def crud_router(
+def crud_router[ModelT: SQLModel](
     *,
     model: type[ModelT],
     create_schema: type[SQLModel],

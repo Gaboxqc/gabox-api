@@ -10,8 +10,6 @@ classes, which exposed the internal `project_id` / `course_id` /
 already existed in models.py but were never wired up.
 """
 
-from typing import TypeVar
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import SQLModel, select
 
@@ -36,10 +34,8 @@ from api.portfolio.models import (
     ProjectTranslationUpdate,
 )
 
-ModelT = TypeVar("ModelT", bound=SQLModel)
 
-
-def translation_router(
+def translation_router[ModelT: SQLModel](
     *,
     parent_model: type[SQLModel],
     model: type[ModelT],
