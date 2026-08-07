@@ -1,0 +1,117 @@
+"""Generic CRUD router for simple lookup resources.
+
+Tags, academies, categories, project types, difficulty levels and languages are
+all the same shape: a primary key and a name. They had drifted into six
+different API surfaces — some paginated, some not, only two with PATCH or
+GET-by-id. This factory gives them one identical contract.
+
+Resources with real query logic (projects, certifications, courses) stay
+hand-written; forcing them through here would cost more than it saves.
+"""
+
+from typing import TypeVar
+
+from fastapi import APIRouter, Depends, status
+from sqlmodel import SQLModel, select
+
+from api.core.database import SessionDep
+from api.core.deps import PageDep, get_or_404
+from api.core.security import validate_api_key
+
+ModelT = TypeVar("ModelT", bound=SQLModel)
+
+
+def _primary_key_column(model: type[SQLModel]):
+    columns = list(model.__table__.primary_key.columns)
+    if len(columns) != 1:
+        raise TypeError(
+            f"crud_router() needs a single-column primary key; "
+            f"{model.__name__} has {len(columns)}."
+        )
+    return getattr(model, columns[0].name)
+
+
+def crud_router(
+    *,
+    model: type[ModelT],
+    create_schema: type[SQLModel],
+    read_schema: type[SQLModel],
+    update_schema: type[SQLModel],
+    prefix: str,
+    tag: str,
+    resource: str,
+    pk_type: type = int,
+) -> APIRouter:
+    """Build the five standard CRUD routes for `model`.
+
+    `resource` is the singular snake_case name used to build operation ids, so
+    generated clients get `create_project_type` rather than a collision between
+    six identically-named closures.
+    """
+    router = APIRouter(prefix=prefix, tags=[tag])
+    pk_column = _primary_key_column(model)
+    plural = prefix.strip("/").replace("-", "_")
+    authenticated = [Depends(validate_api_key)]
+
+    @router.post(
+        "",
+        response_model=read_schema,
+        status_code=status.HTTP_201_CREATED,
+        dependencies=authenticated,
+        operation_id=f"create_{resource}",
+        summary=f"Create a {resource.replace('_', ' ')}",
+    )
+    async def create(payload: create_schema, db: SessionDep):
+        instance = model.model_validate(payload.model_dump())
+        db.add(instance)
+        db.commit()
+        db.refresh(instance)
+        return instance
+
+    @router.get(
+        "",
+        response_model=list[read_schema],
+        operation_id=f"list_{plural}",
+        summary=f"List {plural.replace('_', ' ')}",
+    )
+    async def list_all(db: SessionDep, page: PageDep):
+        query = select(model).order_by(pk_column).offset(page.offset).limit(page.limit)
+        return db.exec(query).all()
+
+    @router.get(
+        "/{item_id}",
+        response_model=read_schema,
+        operation_id=f"get_{resource}",
+        summary=f"Get a single {resource.replace('_', ' ')}",
+    )
+    async def get_one(item_id: pk_type, db: SessionDep):
+        return get_or_404(db, model, item_id)
+
+    @router.patch(
+        "/{item_id}",
+        response_model=read_schema,
+        dependencies=authenticated,
+        operation_id=f"update_{resource}",
+        summary=f"Update a {resource.replace('_', ' ')}",
+    )
+    async def update(item_id: pk_type, payload: update_schema, db: SessionDep):
+        instance = get_or_404(db, model, item_id)
+        for field, value in payload.model_dump(exclude_unset=True).items():
+            setattr(instance, field, value)
+        db.add(instance)
+        db.commit()
+        db.refresh(instance)
+        return instance
+
+    @router.delete(
+        "/{item_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=authenticated,
+        operation_id=f"delete_{resource}",
+        summary=f"Delete a {resource.replace('_', ' ')}",
+    )
+    async def delete(item_id: pk_type, db: SessionDep):
+        db.delete(get_or_404(db, model, item_id))
+        db.commit()
+
+    return router
