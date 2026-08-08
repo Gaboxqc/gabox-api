@@ -58,8 +58,10 @@ def _set_auth_cookies(response: Response, raw_token: str, csrf_token: str) -> No
         key=settings.csrf_cookie_name,
         value=csrf_token,
         max_age=settings.session_max_age_seconds,
-        # Readable on purpose: the dashboard copies it into the X-CSRF-Token
-        # header. It is not a credential on its own — the session cookie is.
+        # Readable rather than httpOnly, but the dashboard takes the token from
+        # the login/me response body instead: this cookie is host-only to the
+        # API, so JavaScript on another subdomain cannot see it. Kept for
+        # same-origin deployments and as a double-submit signal.
         httponly=False,
         secure=settings.session_cookie_secure,
         samesite=settings.session_cookie_samesite,
@@ -134,7 +136,11 @@ async def login(
     _set_auth_cookies(response, raw_token, session.csrf_token)
 
     log.info("Admin %r logged in from %s", user.username, ip_address)
-    return AdminRead(username=user.username, last_login_at=user.last_login_at)
+    return AdminRead(
+        username=user.username,
+        last_login_at=user.last_login_at,
+        csrf_token=session.csrf_token,
+    )
 
 
 @router.post(
@@ -156,9 +162,12 @@ async def logout(response: Response, db: SessionDep, session: SessionDependency)
     summary="Describe the logged-in admin",
 )
 async def me(session: SessionDependency):
+    """Also re-issues the CSRF token, so a dashboard reload can recover it
+    without forcing the user to log in again."""
     return AdminRead(
         username=session.user.username,
         last_login_at=session.user.last_login_at,
+        csrf_token=session.csrf_token,
     )
 
 

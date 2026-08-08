@@ -49,6 +49,37 @@ def test_session_cookie_is_httponly_and_csrf_cookie_is_not(client, admin):
     assert "httponly" not in csrf_header.lower()
 
 
+def test_login_returns_the_csrf_token_in_the_body(client, admin):
+    """The dashboard cannot read the CSRF cookie: it is host-only to the API and
+    the dashboard runs on a different subdomain. The body is its only source."""
+    response = client.post(
+        "/auth/login", json={"username": admin["username"], "password": admin["password"]}
+    )
+    token = response.json()["csrf_token"]
+    assert token
+    assert token == client.cookies["gabox_csrf"]
+
+
+def test_me_reissues_the_csrf_token(client, login):
+    """So a dashboard reload recovers the token without a fresh login."""
+    login()
+    body = client.get("/auth/me").json()
+    assert body["csrf_token"] == client.cookies["gabox_csrf"]
+
+
+def test_body_csrf_token_is_accepted_on_writes(client, admin):
+    """Proves the body token is interchangeable with the cookie-derived one."""
+    response = client.post(
+        "/auth/login", json={"username": admin["username"], "password": admin["password"]}
+    )
+    token = response.json()["csrf_token"]
+    client.cookies.delete("gabox_csrf")  # as it would be, cross-subdomain
+    created = client.post(
+        "/portfolio/tags", json={"name": "Haskell"}, headers={"X-CSRF-Token": token}
+    )
+    assert created.status_code == 201
+
+
 def test_secure_flag_is_set_when_configured(client, admin, monkeypatch):
     """The suite runs with Secure off (see conftest), so the production default
     needs asserting explicitly — shipping without it would expose the session
