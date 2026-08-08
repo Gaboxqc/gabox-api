@@ -314,8 +314,12 @@ class ProjectBase(ProjectBaseFlat):
     difficulty_level_id: int = Field(foreign_key="portfolio_difficulty_level.id")
 
 
+# `tag_ids` is a write-only convenience: the tag links live in a separate table,
+# so the routers translate these ids into `Tag` rows rather than passing them to
+# the table model. On update, `None` means "leave the tags alone" while `[]`
+# means "remove them all" — a plain list could not express both.
 class ProjectCreate(ProjectBase):
-    pass
+    tag_ids: list[int] = []
 
 
 class ProjectUpdate(SQLModel):
@@ -326,6 +330,7 @@ class ProjectUpdate(SQLModel):
     image_url: str | None = None
     git_url: str | None = None
     deploy_url: str | None = None
+    tag_ids: list[int] | None = None
 
 
 class Project(ProjectBase, table=True):
@@ -359,7 +364,7 @@ class CourseBase(CourseBaseFlat):
 
 
 class CourseCreate(CourseBase):
-    pass
+    tag_ids: list[int] = []
 
 
 class CourseUpdate(SQLModel):
@@ -367,6 +372,7 @@ class CourseUpdate(SQLModel):
     url: str | None = None
     academy_id: int | None = None
     category_id: int | None = None
+    tag_ids: list[int] | None = None
 
 
 class CourseRead(CourseBase):
@@ -395,6 +401,10 @@ class CourseReadComplete(CourseBaseFlat):
 # --- Core Entity: Certification ---
 class CertificationBaseFlat(SQLModel):
     year: int
+    # Mirrors Project.is_main. The frontend has always had a "Main
+    # certifications" section, but the column did not exist, so the filter it
+    # sent was silently ignored and the section showed unfiltered results.
+    is_main: bool = Field(default=False, index=True)
     validation_serial: str | None = None
     url: str | None = None
 
@@ -405,15 +415,17 @@ class CertificationBase(CertificationBaseFlat):
 
 
 class CertificationCreate(CertificationBase):
-    pass
+    tag_ids: list[int] = []
 
 
 class CertificationUpdate(SQLModel):
     year: int | None = None
+    is_main: bool | None = None
     validation_serial: str | None = None
     url: str | None = None
     academy_id: int | None = None
     category_id: int | None = None
+    tag_ids: list[int] | None = None
 
 
 class CertificationRead(CertificationBase):

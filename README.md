@@ -175,6 +175,39 @@ Certification / Course follow the same idea
   └── Category
 ```
 
+### Attaching tags
+
+Create and update payloads take a write-only `tag_ids` array. The tag links live
+in a join table, so the routers translate these ids into rows rather than
+storing them on the record.
+
+```jsonc
+// POST /portfolio/projects
+{ "year": 2026, "project_type_id": 1, "difficulty_level_id": 2, "tag_ids": [3, 7] }
+```
+
+On `PATCH` the field distinguishes two cases that a plain list cannot:
+
+| `tag_ids` | Effect |
+| --- | --- |
+| omitted / `null` | Tags are left untouched |
+| `[]` | Every tag is removed |
+| `[3, 7]` | Tags are replaced with exactly these |
+
+Unknown ids are rejected with a `422` naming them, rather than being dropped
+silently — a typo should not look like a save that quietly lost a tag.
+Duplicates are collapsed.
+
+### Pagination totals
+
+Every list endpoint returns an `X-Total-Count` header with the number of rows
+matching the current filters, ignoring `offset` and `limit`, so a client can size
+a pager without a second request.
+
+A header rather than a `{items, total}` envelope, because the public frontend
+already consumes bare arrays. The header is listed in the CORS `expose_headers`,
+without which a browser receives it but JavaScript cannot read it.
+
 ---
 
 ## Errors

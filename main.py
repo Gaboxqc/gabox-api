@@ -28,6 +28,10 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # A cross-origin response's custom headers are invisible to JavaScript
+        # unless they are listed here, so the dashboard's pagination would read
+        # undefined without this.
+        expose_headers=["X-Total-Count"],
     )
 
     register_exception_handlers(app)
