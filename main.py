@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.core.auth import auth_router
 from api.core.config import settings
 from api.core.errors import register_exception_handlers
 from api.core.health import router as health_router
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     app.include_router(health_router)
+    app.include_router(auth_router)
     app.include_router(portfolio_router, prefix="/portfolio")
     app.include_router(statpitch_router, prefix="/statpitch")
 

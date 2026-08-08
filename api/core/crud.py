@@ -12,9 +12,9 @@ hand-written; forcing them through here would cost more than it saves.
 from fastapi import APIRouter, Depends, status
 from sqlmodel import SQLModel, select
 
+from api.core.auth.deps import require_admin
 from api.core.database import SessionDep
 from api.core.deps import PageDep, get_or_404, primary_key_column
-from api.core.security import validate_api_key
 
 
 def crud_router[ModelT: SQLModel](
@@ -37,7 +37,7 @@ def crud_router[ModelT: SQLModel](
     router = APIRouter(prefix=prefix, tags=[tag])
     pk_column = primary_key_column(model)
     plural = prefix.strip("/").replace("-", "_")
-    authenticated = [Depends(validate_api_key)]
+    authenticated = [Depends(require_admin)]
 
     @router.post(
         "",
