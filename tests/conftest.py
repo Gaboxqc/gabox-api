@@ -11,6 +11,10 @@ import os
 
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["API_MASTER_KEY"] = "test-master-key"
+# TestClient talks to http://testserver, and httpx correctly refuses to send a
+# Secure cookie over plain http to a non-localhost host. Without this the
+# session cookie would be set and then never returned.
+os.environ["SESSION_COOKIE_SECURE"] = "false"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -18,6 +22,7 @@ from sqlalchemy import event  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 
+import api.core.auth.models  # noqa: F401,E402  registers tables on the metadata
 import api.portfolio.models  # noqa: F401,E402  registers tables on the metadata
 from api.core.config import settings  # noqa: E402
 from api.core.database import get_session  # noqa: E402
@@ -58,6 +63,46 @@ def client_fixture(engine):
 @pytest.fixture(name="auth")
 def auth_fixture() -> dict[str, str]:
     return {"X-API-KEY": settings.api_master_key}
+
+
+ADMIN_USERNAME = "gabox"
+ADMIN_PASSWORD = "correct-horse-battery-staple"
+
+
+@pytest.fixture(name="admin")
+def admin_fixture(engine):
+    """An active admin account with a known password."""
+    from api.core.auth.models import AdminUser
+    from api.core.auth.passwords import hash_password
+
+    with Session(engine) as db:
+        user = AdminUser(username=ADMIN_USERNAME, password_hash=hash_password(ADMIN_PASSWORD))
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return {"id": user.id, "username": user.username, "password": ADMIN_PASSWORD}
+
+
+@pytest.fixture(name="login")
+def login_fixture(client, admin):
+    """Log in and return the CSRF header the session expects.
+
+    TestClient keeps the session cookie in its jar automatically; only the CSRF
+    token has to be moved into a header by hand, exactly as the dashboard does.
+    """
+
+    def _login(username=None, password=None):
+        response = client.post(
+            "/auth/login",
+            json={
+                "username": username or admin["username"],
+                "password": password or admin["password"],
+            },
+        )
+        assert response.status_code == 200, f"login failed: {response.text}"
+        return {"X-CSRF-Token": client.cookies["gabox_csrf"]}
+
+    return _login
 
 
 @pytest.fixture(name="create")

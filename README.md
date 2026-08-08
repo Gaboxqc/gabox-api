@@ -194,7 +194,9 @@ Database errors never surface as 500s or leak SQL — the raw error goes to the 
 
 ## Auth
 
-Write endpoints check an `X-API-KEY` header:
+Write endpoints accept **either** of two credentials.
+
+### 1. Master key — for scripts and machine callers
 
 ```
 X-API-KEY: your-secret-key
@@ -202,11 +204,42 @@ X-API-KEY: your-secret-key
 
 The key comes from `API_MASTER_KEY`. It is compared in constant time, and the app refuses to start if the variable is missing, so write access can never be accidentally left open.
 
+### 2. Admin session — for the dashboard
+
+The master key must never reach a browser, so the admin dashboard logs in with a password instead and receives a server-side session.
+
+Create the account first (there is no signup endpoint, on purpose):
+
+```bash
+alembic upgrade head
+python -m scripts.create_admin
+```
+
+Then:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/auth/login` | Exchange username + password for a session cookie |
+| `POST` | `/auth/logout` | Revoke the current session |
+| `GET` | `/auth/me` | Describe the logged-in admin |
+| `GET` | `/auth/sessions` | List active sessions, to spot one you do not recognise |
+
+How it works, and why:
+
+- **argon2id** password hashing — memory-hard, so GPU cracking is expensive rather than merely slower.
+- **Opaque session tokens, stored as SHA-256 hashes.** Not JWTs: a JWT cannot be revoked, so a stolen one stays valid until it expires. A row here can be deleted, and the lookup is free because every request already reaches Postgres. Only the hash is stored, so a database leak hands over no live sessions.
+- **`httpOnly; Secure; SameSite=Lax` cookie.** JavaScript cannot read it, so XSS cannot exfiltrate the session. Lax is enough because the API and the site share a registrable domain.
+- **CSRF**: unsafe methods must echo the readable `gabox_csrf` cookie in an `X-CSRF-Token` header. It is compared against the value held server side, so an attacker who can only write cookies still cannot pass it. Master-key callers are exempt — a browser never attaches a custom header on its own.
+- **Lockout**: failed attempts are counted in the database, per username *and* per IP, so neither rotating usernames nor spraying from one address slips through. An in-memory counter would enforce nothing on serverless, where every invocation is a fresh process.
+- **No user enumeration**: an unknown username and a wrong password return an identical response, and the unknown-username path burns the same CPU on a throwaway hash so timing does not leak either.
+
+Changing a password (`--reset`) revokes every existing session, so a reset after a suspected compromise actually locks the attacker out.
+
 ---
 
 ## Deploying
 
-`vercel.json` is already set up. Connect the repo on Vercel and add `DATABASE_URL` and `API_MASTER_KEY` as environment variables.
+`vercel.json` is already set up. Connect the repo on Vercel and add `DATABASE_URL` and `API_MASTER_KEY` as environment variables. Run `alembic upgrade head` against the production database, then `python -m scripts.create_admin` once to create the admin account.
 
 Migrations are not run automatically — apply them before deploying a schema change:
 

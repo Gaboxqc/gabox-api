@@ -1,4 +1,9 @@
-"""API-key authentication on write endpoints."""
+"""API-key authentication on write endpoints.
+
+Write endpoints now accept either the master key or an admin session cookie
+(see test_admin_auth.py), so the rejection message is credential-agnostic
+rather than naming the API key.
+"""
 
 import pytest
 
@@ -20,7 +25,7 @@ def call(client, method, path, payload, headers=None):
 def test_write_without_key_is_rejected(client, method, path, payload):
     response = call(client, method, path, payload)
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid or missing API key."
+    assert response.json()["detail"] == "Authentication required."
 
 
 @pytest.mark.parametrize(("method", "path", "payload"), WRITE_ENDPOINTS)

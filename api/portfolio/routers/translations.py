@@ -13,9 +13,9 @@ already existed in models.py but were never wired up.
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import SQLModel, select
 
+from api.core.auth.deps import require_admin
 from api.core.database import SessionDep
 from api.core.deps import PageDep, get_or_404
-from api.core.security import validate_api_key
 from api.portfolio.models import (
     Certification,
     CertificationTranslation,
@@ -54,7 +54,7 @@ def translation_router[ModelT: SQLModel](
     ids and error messages.
     """
     router = APIRouter(prefix=prefix, tags=[tag])
-    authenticated = [Depends(validate_api_key)]
+    authenticated = [Depends(require_admin)]
     parent_column = getattr(model, parent_field)
 
     def _translation_or_404(db: SessionDep, parent_id: int, language_code: str) -> ModelT:

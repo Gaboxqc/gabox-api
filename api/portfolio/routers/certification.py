@@ -3,9 +3,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 from sqlmodel import select
 
+from api.core.auth.deps import require_admin
 from api.core.database import SessionDep
 from api.core.deps import PageDep, eager_options, get_or_404, get_with_relations
-from api.core.security import validate_api_key
 from api.portfolio.models import (
     Certification,
     CertificationCreate,
@@ -15,7 +15,7 @@ from api.portfolio.models import (
 )
 
 router = APIRouter(prefix="/certifications")
-authenticated = [Depends(validate_api_key)]
+authenticated = [Depends(require_admin)]
 
 RELATIONS = (
     Certification.academy,
