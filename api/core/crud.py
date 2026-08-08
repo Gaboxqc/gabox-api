@@ -9,8 +9,8 @@ Resources with real query logic (projects, certifications, courses) stay
 hand-written; forcing them through here would cost more than it saves.
 """
 
-from fastapi import APIRouter, Depends, status
-from sqlmodel import SQLModel, select
+from fastapi import APIRouter, Depends, Response, status
+from sqlmodel import SQLModel, func, select
 
 from api.core.auth.deps import require_admin
 from api.core.database import SessionDep
@@ -60,7 +60,10 @@ def crud_router[ModelT: SQLModel](
         operation_id=f"list_{plural}",
         summary=f"List {plural.replace('_', ' ')}",
     )
-    async def list_all(db: SessionDep, page: PageDep):
+    async def list_all(response: Response, db: SessionDep, page: PageDep):
+        total = db.exec(select(func.count()).select_from(model)).one()
+        response.headers["X-Total-Count"] = str(int(total))
+
         query = select(model).order_by(pk_column).offset(page.offset).limit(page.limit)
         return db.exec(query).all()
 

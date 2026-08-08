@@ -1,11 +1,12 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlmodel import select
 
 from api.core.auth.deps import require_admin
 from api.core.database import SessionDep
 from api.core.deps import PageDep, eager_options, escape_like, get_or_404, get_with_relations
+from api.portfolio.deps import apply_tag_ids, count_matching, resolve_tags, set_total_count
 from api.portfolio.models import (
     Project,
     ProjectCreate,
@@ -38,7 +39,12 @@ def _load(db: SessionDep, project_id: int) -> Project:
     dependencies=authenticated,
 )
 async def create_project(project_data: ProjectCreate, db: SessionDep):
-    project = Project.model_validate(project_data.model_dump())
+    payload = project_data.model_dump()
+    # tag_ids is not a column, so it is resolved into related rows separately.
+    tag_ids = payload.pop("tag_ids", [])
+
+    project = Project.model_validate(payload)
+    project.tags = resolve_tags(db, tag_ids)
     db.add(project)
     db.commit()
     db.refresh(project)
@@ -47,6 +53,7 @@ async def create_project(project_data: ProjectCreate, db: SessionDep):
 
 @router.get("", response_model=list[ProjectReadComplete])
 async def list_projects(
+    response: Response,
     db: SessionDep,
     page: PageDep,
     is_main: Annotated[bool | None, Query(description="Filter featured projects only")] = None,
@@ -82,6 +89,8 @@ async def list_projects(
     if tag_id:
         query = query.where(Project.tags.any(Tag.id.in_(tag_id)))
 
+    set_total_count(response, count_matching(db, query))
+
     query = query.options(*eager_options(RELATIONS)).order_by(Project.id)
     return db.exec(query.offset(page.offset).limit(page.limit)).all()
 
@@ -98,8 +107,13 @@ async def get_project(project_id: int, db: SessionDep):
 )
 async def update_project(project_id: int, project_data: ProjectUpdate, db: SessionDep):
     project = get_or_404(db, Project, project_id)
-    for field, value in project_data.model_dump(exclude_unset=True).items():
+    changes = project_data.model_dump(exclude_unset=True)
+    tag_ids = changes.pop("tag_ids", None)
+
+    for field, value in changes.items():
         setattr(project, field, value)
+    apply_tag_ids(db, project, tag_ids)
+
     db.add(project)
     db.commit()
     return _load(db, project_id)

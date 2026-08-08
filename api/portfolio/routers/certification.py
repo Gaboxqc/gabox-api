@@ -1,11 +1,12 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlmodel import select
 
 from api.core.auth.deps import require_admin
 from api.core.database import SessionDep
 from api.core.deps import PageDep, eager_options, get_or_404, get_with_relations
+from api.portfolio.deps import apply_tag_ids, count_matching, resolve_tags, set_total_count
 from api.portfolio.models import (
     Certification,
     CertificationCreate,
@@ -36,7 +37,11 @@ def _load(db: SessionDep, certification_id: int) -> Certification:
     dependencies=authenticated,
 )
 async def create_certification(certification_data: CertificationCreate, db: SessionDep):
-    certification = Certification.model_validate(certification_data.model_dump())
+    payload = certification_data.model_dump()
+    tag_ids = payload.pop("tag_ids", [])
+
+    certification = Certification.model_validate(payload)
+    certification.tags = resolve_tags(db, tag_ids)
     db.add(certification)
     db.commit()
     db.refresh(certification)
@@ -45,14 +50,21 @@ async def create_certification(certification_data: CertificationCreate, db: Sess
 
 @router.get("", response_model=list[CertificationReadComplete])
 async def list_certifications(
+    response: Response,
     db: SessionDep,
     page: PageDep,
+    is_main: Annotated[
+        bool | None, Query(description="Filter featured certifications only")
+    ] = None,
     year: Annotated[int | None, Query(description="Filter by year of issue")] = None,
     academy_id: Annotated[int | None, Query(description="Filter by academy ID")] = None,
     category_id: Annotated[int | None, Query(description="Filter by category ID")] = None,
     tag_id: Annotated[list[int] | None, Query(description="Filter by tag ID")] = None,
 ):
     query = select(Certification)
+
+    if is_main is not None:
+        query = query.where(Certification.is_main == is_main)
 
     if year:
         query = query.where(Certification.year == year)
@@ -65,6 +77,8 @@ async def list_certifications(
 
     if tag_id:
         query = query.where(Certification.tags.any(Tag.id.in_(tag_id)))
+
+    set_total_count(response, count_matching(db, query))
 
     query = query.options(*eager_options(RELATIONS)).order_by(Certification.id)
     return db.exec(query.offset(page.offset).limit(page.limit)).all()
@@ -86,8 +100,13 @@ async def update_certification(
     db: SessionDep,
 ):
     certification = get_or_404(db, Certification, certification_id)
-    for field, value in certification_data.model_dump(exclude_unset=True).items():
+    changes = certification_data.model_dump(exclude_unset=True)
+    tag_ids = changes.pop("tag_ids", None)
+
+    for field, value in changes.items():
         setattr(certification, field, value)
+    apply_tag_ids(db, certification, tag_ids)
+
     db.add(certification)
     db.commit()
     return _load(db, certification_id)
