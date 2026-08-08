@@ -91,7 +91,18 @@ class LoginRequest(SQLModel):
 
 
 class AdminRead(SQLModel):
-    """What `GET /auth/me` returns. Deliberately excludes the password hash."""
+    """What `/auth/login` and `/auth/me` return. Excludes the password hash.
+
+    `csrf_token` is delivered in the body rather than read from the readable
+    cookie, because the cookie is host-only to the API and the dashboard runs on
+    a different subdomain — `document.cookie` there cannot see it. Local
+    development hides this, since localhost:5173 and localhost:8000 are the same
+    host and do share cookies.
+
+    Returning it is safe: CORS stops a non-allowlisted origin from reading any
+    response body, so only the real dashboard can obtain it.
+    """
 
     username: str
     last_login_at: datetime | None = None
+    csrf_token: str
