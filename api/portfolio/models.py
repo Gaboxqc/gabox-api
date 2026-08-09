@@ -155,6 +155,10 @@ class Language(LanguageBase, table=True):
 # --- Academy ---
 class AcademyBase(SQLModel):
     name: str = Field(min_length=2, index=True)
+    # Logo shown beside every course and certification from this academy. Held
+    # on the academy rather than repeated on each record, so changing a logo is
+    # one edit instead of one per certificate.
+    image_url: str | None = None
 
 
 class AcademyCreate(AcademyBase):
@@ -163,6 +167,7 @@ class AcademyCreate(AcademyBase):
 
 class AcademyUpdate(SQLModel):
     name: str | None = None
+    image_url: str | None = None
 
 
 class AcademyRead(AcademyBase):
