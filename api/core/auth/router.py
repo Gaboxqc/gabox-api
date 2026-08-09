@@ -14,6 +14,7 @@ from api.core.auth.sessions import (
     is_locked_out,
     prune_old_attempts,
     record_attempt,
+    revoke_all_sessions,
     revoke_session,
 )
 from api.core.config import settings
@@ -34,13 +35,15 @@ _INVALID_CREDENTIALS = HTTPException(
 def _client_ip(request: Request) -> str:
     """Caller's address, preferring the proxy header Vercel sets.
 
-    `X-Forwarded-For` is client-controllable in general, so this is only safe
-    because the app is always behind a proxy that overwrites it. Directly
-    exposed, an attacker could spoof it to dodge the lockout.
+    `X-Forwarded-For` is client-controllable, so it is only believed when
+    `trust_proxy_headers` says a proxy is overwriting it. Exposed directly, an
+    attacker could otherwise forge the header and sidestep the lockout entirely
+    by presenting a fresh address on each attempt.
     """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    if settings.trust_proxy_headers:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -169,6 +172,24 @@ async def me(session: SessionDependency):
         last_login_at=session.user.last_login_at,
         csrf_token=session.csrf_token,
     )
+
+
+@router.post(
+    "/sessions/revoke-all",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="admin_revoke_all_sessions",
+    summary="Sign out of every session, including this one",
+)
+async def revoke_all(response: Response, db: SessionDep, session: SessionDependency):
+    """The action that makes listing sessions useful.
+
+    Without this, spotting an unfamiliar session left nothing to do about it. The
+    current session is revoked too, deliberately: after a suspected compromise
+    the safe end state is everything closed and a fresh login.
+    """
+    closed = revoke_all_sessions(db, session.user_id)
+    _clear_auth_cookies(response)
+    log.warning("Admin %r revoked all %d session(s)", session.user.username, closed)
 
 
 @router.get(

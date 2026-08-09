@@ -97,18 +97,24 @@ async def require_admin(
         if session is not None and session.user.is_active:
             if _csrf_ok(request, session, csrf_header):
                 touch_session(db, session)
-                return Principal(
+                principal = Principal(
                     kind="session",
                     username=session.user.username,
                     session_id=session.id,
                 )
+                # Middleware runs after the handler and cannot resolve
+                # dependencies, so the principal is handed over on the request.
+                request.state.principal = principal
+                return principal
             csrf_rejected = True
 
     # The master key is exempt from CSRF: browsers never attach a custom header
     # on their own, and a cross-site caller cannot add one without passing a
     # CORS preflight this app's origin allowlist rejects.
     if _api_key_matches(api_key):
-        return Principal(kind="api_key")
+        principal = Principal(kind="api_key")
+        request.state.principal = principal
+        return principal
 
     # A valid session with a bad token is a CSRF failure (403), not a missing
     # credential (401) — reporting 401 would send the dashboard to the login page

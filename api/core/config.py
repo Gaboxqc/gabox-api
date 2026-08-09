@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     # Inactivity cutoff, slid forward on each authenticated request.
     session_idle_seconds: int = 60 * 60 * 2
 
+    # Send HSTS. On by default because every deployment is HTTPS behind Vercel.
+    security_hsts: bool = True
+
+    # Whether X-Forwarded-For may be believed when identifying the caller.
+    # True is correct behind a proxy that overwrites it, as Vercel does. Running
+    # the API directly exposed, an attacker could forge the header to sidestep
+    # the login lockout, so it must be turned off in that case.
+    trust_proxy_headers: bool = True
+
     # ── Login throttling ──────────────────────────────────────────────────────
     login_max_attempts: int = 5
     login_attempt_window_seconds: int = 60 * 15

@@ -8,6 +8,7 @@ from sqlmodel import SQLModel
 # Importing these modules registers every table on SQLModel.metadata, which is
 # what autogenerate diffs against. A module missing here reads as "table was
 # deleted" and autogenerate will happily write a DROP TABLE for it.
+import api.core.audit  # noqa: F401
 import api.core.auth.models  # noqa: F401
 import api.portfolio.models  # noqa: F401
 import api.statpitch.models  # noqa: F401
