@@ -266,7 +266,17 @@ How it works, and why:
 - **Lockout**: failed attempts are counted in the database, per username *and* per IP, so neither rotating usernames nor spraying from one address slips through. An in-memory counter would enforce nothing on serverless, where every invocation is a fresh process.
 - **No user enumeration**: an unknown username and a wrong password return an identical response, and the unknown-username path burns the same CPU on a throwaway hash so timing does not leak either.
 
-Changing a password (`--reset`) revokes every existing session, so a reset after a suspected compromise actually locks the attacker out.
+Changing a password (`--reset`) revokes every existing session, so a reset after a suspected compromise actually locks the attacker out. `POST /auth/sessions/revoke-all` does the same from the dashboard, including the session that asked — after a suspected compromise the safe end state is everything closed.
+
+### Audit trail
+
+Successful admin writes are recorded in `admin_audit_log`: method, path, status, which credential authorised it, and the username when a person was behind it.
+
+Only the request line and its outcome — never bodies or query strings. A body would eventually contain a password, and no amount of care around one endpoint keeps that true as endpoints are added. Reads are skipped, rejected writes are skipped (nothing changed, and logging probes would just let an attacker inflate the table), and `/auth` is skipped because logins already have `admin_login_attempt`.
+
+### Response headers
+
+Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin` and a `Permissions-Policy` denying camera, microphone and location. HTTPS responses add HSTS. `/auth` responses are `Cache-Control: no-store`, since they carry the username and CSRF token; public reads stay cacheable.
 
 ---
 

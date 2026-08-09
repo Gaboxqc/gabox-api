@@ -22,6 +22,7 @@ from sqlalchemy import event  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 
+import api.core.audit  # noqa: F401,E402  registers tables on the metadata
 import api.core.auth.models  # noqa: F401,E402  registers tables on the metadata
 import api.portfolio.models  # noqa: F401,E402  registers tables on the metadata
 from api.core.config import settings  # noqa: E402
@@ -55,8 +56,19 @@ def client_fixture(engine):
             yield session
 
     app.dependency_overrides[get_session] = session_override
+
+    # The audit middleware opens its own session and so cannot go through
+    # dependency_overrides; point its factory at the test engine too, or it
+    # would write to the real one.
+    import api.core.audit as audit
+
+    original_audit_session = audit.audit_session
+    audit.audit_session = lambda: Session(engine)
+
     with TestClient(app) as test_client:
         yield test_client
+
+    audit.audit_session = original_audit_session
     app.dependency_overrides.clear()
 
 

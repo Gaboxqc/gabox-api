@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.core.audit import AuditMiddleware
 from api.core.auth import auth_router
 from api.core.config import settings
 from api.core.errors import register_exception_handlers
+from api.core.headers import SecurityHeadersMiddleware
 from api.core.health import router as health_router
 from api.core.logging import configure_logging
 from api.portfolio.routers import portfolio_router
@@ -21,6 +23,12 @@ def create_app() -> FastAPI:
         ),
         version="2.0.0",
     )
+
+    # Starlette runs middleware in reverse registration order, so these are
+    # added before CORS to leave CORS outermost — its preflight short-circuit
+    # must still carry the access-control headers.
+    app.add_middleware(AuditMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware, hsts=settings.security_hsts)
 
     app.add_middleware(
         CORSMiddleware,
