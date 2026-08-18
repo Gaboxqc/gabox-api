@@ -47,6 +47,7 @@ api/
     sync.py        The daily pass that ties them together
 tests/           pytest suite, runs against in-memory SQLite
 alembic/         Migrations
+docs/            STATPITCH.md — the StatPitch reference
 main.py          create_app() factory
 ```
 
@@ -187,59 +188,27 @@ legitimately show nothing under today's date.
 
 ## How StatPitch works
 
-[StatPitch](https://statpitch-api.onrender.com/docs) is stateless: it has no
-database and no memory between requests. This API is what persists its output
-and serves the frontend.
+Full reference: **[docs/STATPITCH.md](docs/STATPITCH.md)**.
 
-**It never returns a bet.** Its shrinkage weight against the closing line
-measured 0.000, so `/best-bet`, `/card/today` and `/value-bets/today` all refuse
-by design. It also has **no results endpoint**. So StatPitch supplies
-probabilities, and three things have to come from elsewhere:
-
-| Needed for ROI | Source |
-|---|---|
-| A selection | Ours — `pricing.py`, EV and quarter-Kelly |
-| A real price | The Odds API (`fair_odds` upstream is no-vig and unbettable) |
-| A final score | The Odds API `/scores` |
-
-### Two tables, two lifetimes
+[StatPitch](https://statpitch-api.onrender.com/docs) is stateless and supplies
+probabilities only. It never recommends a bet, its `fair_odds` are no-vig and
+unbettable, and it has no results endpoint — so real prices and final scores
+come from The Odds API, and the selections are ours (EV and quarter-Kelly).
 
 Fixtures are shown for three days and deleted; ROI is measured over seven and
-thirty. Those requirements are incompatible in one table, so there are two:
-
-- **`statpitch_fixture`** — a cache, pruned to yesterday/today/tomorrow.
-- **`statpitch_settled_bet`** — an append-only ledger, never pruned.
-
-The sync settles a fixture and banks its ledger rows *before* pruning, and
-`prune_fixtures` refuses to drop a fixture that still owes the ledger a row. The
-retention policy and the track record are therefore independent by
-construction, not by scheduling luck.
+thirty. Those cannot share a table, so there are two: `statpitch_fixture` is a
+cache pruned to yesterday/today/tomorrow, and `statpitch_settled_bet` is an
+append-only ledger that is never pruned. Pruning refuses to drop a fixture that
+still owes the ledger a row, which makes retention and the track record
+independent by construction rather than by scheduling luck.
 
 Two series are tracked separately so they can be compared rather than blurred:
-`1x2` is the best 1X2 pick, `overall` the best across every market. ROI is
-flat-stake, and `roi_pct` is `null` — not `0.0` — when nothing settled in a
-window.
+the best 1X2 pick, and the best across every market.
 
-### The rollover
-
-"Today" is a Nicaragua day, not a UTC one. `clock.py` is the only module allowed
-to ask what day it is; nothing else calls `date.today()`. The sync runs at 06:00
-UTC — local midnight — driven by `.github/workflows/statpitch-sync.yml`, which
-needs the `API_BASE_URL` and `API_MASTER_KEY` repository secrets.
-
-It lives in GitHub Actions rather than `vercel.json` because Vercel Cron issues
-`GET` requests and cannot attach the `X-API-KEY` header the endpoint requires.
-
-### Quota
-
-Only five of StatPitch's twelve competitions have an odds market to price
-against. Each costs one Odds API request per market per run, so
-`ODDS_API_MARKETS` defaults to `h2h` alone: five leagues once a day is ~150
-requests/month, while adding `totals` and `btts` takes it past 450 before scores
-are counted.
-
-Without `ODDS_API_KEY` the sync still stores and serves predictions — it just
-cannot price them, and no bets enter the ledger.
+"Today" is a Nicaragua day, not the server's. `clock.py` is the only module
+allowed to ask what day it is. The rollover runs at 06:00 UTC from
+`.github/workflows/statpitch-sync.yml`, which needs the `API_BASE_URL` and
+`API_MASTER_KEY` repository secrets.
 
 ---
 
