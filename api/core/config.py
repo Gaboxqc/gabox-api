@@ -63,6 +63,62 @@ class Settings(BaseSettings):
     login_max_attempts: int = 5
     login_attempt_window_seconds: int = 60 * 15
 
+    # ── StatPitch ─────────────────────────────────────────────────────────────
+    # All optional: without them the StatPitch routes return 503 and the rest of
+    # the app is unaffected.
+    statpitch_base_url: str = "https://statpitch-api.onrender.com"
+    # The free Render instance sleeps after ~15 minutes idle and the next call
+    # pays a cold start of tens of seconds. This is not a value to shrink.
+    statpitch_timeout_seconds: float = 60.0
+
+    # Which competitions to sync. Defaults to the five with an odds market we
+    # can price against; the seven cups get predictions but never a bet.
+    statpitch_competitions: list[str] = [
+        "ENG.PL",
+        "ESP.LALIGA",
+        "GER.BUNDESLIGA",
+        "ITA.SERIEA",
+        "FRA.LIGUE1",
+    ]
+
+    # The day the frontend calls "today" rolls over at local midnight here.
+    statpitch_timezone: str = "America/Managua"
+    # Days kept either side of today, so 1 means yesterday/today/tomorrow.
+    statpitch_retention_days: int = 1
+
+    odds_api_key: str = ""
+    odds_api_region: str = "eu"
+    # One request per market per league per run, against a 500/month free tier.
+    # h2h alone across five leagues is ~150/month; adding totals and btts takes
+    # it to ~450 before scores are counted.
+    odds_api_markets: list[str] = ["h2h"]
+    # Empty means average every bookmaker the region returns.
+    odds_api_bookmakers: list[str] = []
+
+    @field_validator(
+        "statpitch_competitions",
+        "odds_api_markets",
+        "odds_api_bookmakers",
+        mode="before",
+    )
+    @classmethod
+    def _split_csv(cls, value: object) -> object:
+        """Accept `a,b` in addition to pydantic's default JSON list."""
+        if isinstance(value, str) and not value.strip().startswith("["):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("statpitch_timezone")
+    @classmethod
+    def _check_timezone(cls, value: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"statpitch_timezone is not a known IANA zone: {value!r}") from exc
+        return value
+
     @field_validator("session_cookie_samesite")
     @classmethod
     def _check_samesite(cls, value: str) -> str:

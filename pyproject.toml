@@ -29,15 +29,13 @@ dev = [
 [tool.black]
 line-length = 100
 target-version = ["py312"]
-# Kept in step with the ruff exclusions below.
-extend-exclude = "api/statpitch"
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-# StatPitch predates this setup and is being reworked separately; migration
-# scripts are generated. Drop these entries as each is cleaned up.
-exclude = ["api/statpitch", "alembic/versions"]
+# Migration scripts are generated, and reformatting them would obscure the diff
+# against what Alembic actually wrote.
+exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

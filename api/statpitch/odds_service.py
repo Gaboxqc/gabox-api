@@ -1,177 +1,125 @@
+"""Real bookmaker prices from The Odds API.
+
+StatPitch supplies probabilities but no bettable price — its `fair_odds` is
+`1 / probability`, a no-vig number it explicitly says you cannot bet. Without a
+real price there is no expected value, no stake and no ROI, so this module is
+what makes the whole track record possible.
+
+It is also the quota bottleneck. One request per market per league per run,
+against a 500/month free tier, is why `odds_api_markets` defaults to `h2h`
+alone: five leagues once a day is ~150 requests/month, while adding totals and
+btts takes it past 450 before scores are counted.
+"""
+
 import logging
-import os
-from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Optional
-from zoneinfo import ZoneInfo
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import httpx
-from fastapi import HTTPException, status
 
-log = logging.getLogger("statpitch.odds_service")
+from api.core.config import settings
+from api.statpitch.leagues import sport_key_for
+
+log = logging.getLogger("statpitch.odds")
 
 _ODDS_API_BASE = "https://api.the-odds-api.com/v4"
-_DEFAULT_SPORT = "soccer_fifa_world_cup"
-_DEFAULT_REGION = "eu"
+# btts is a UK-book market; asking for it in the EU region returns nothing.
+_BTTS_REGION = "uk"
+
+
+class OddsUnavailable(RuntimeError):
+    """The Odds API is not configured, or refused the credentials."""
 
 
 @dataclass
-class MatchOdds:
-    """Parsed, bookmaker-averaged odds for a single match across all markets."""
+class OddsEvent:
+    """One event with whatever markets we successfully priced."""
 
+    event_id: str
+    competition_id: str
     home_team: str
     away_team: str
-    match_date: date
-    commence_time: Optional[datetime] = None
+    # A real UTC instant, unlike StatPitch's naive `kickoff` string. This is
+    # what every local-day bucket is computed from.
+    commence_time: datetime
 
-    # 1X2
-    odds_home: Optional[float] = None
-    odds_draw: Optional[float] = None
-    odds_away: Optional[float] = None
+    odds_home: float | None = None
+    odds_draw: float | None = None
+    odds_away: float | None = None
+    odds_over_1_5: float | None = None
+    odds_under_1_5: float | None = None
+    odds_over_2_5: float | None = None
+    odds_under_2_5: float | None = None
+    odds_over_3_5: float | None = None
+    odds_under_3_5: float | None = None
+    odds_btts_yes: float | None = None
+    odds_btts_no: float | None = None
 
-    # Over/Under
-    odds_over_1_5: Optional[float] = None
-    odds_under_1_5: Optional[float] = None
-    odds_over_2_5: Optional[float] = None
-    odds_under_2_5: Optional[float] = None
-    odds_over_3_5: Optional[float] = None
-    odds_under_3_5: Optional[float] = None
-
-    # BTTS
-    odds_btts_yes: Optional[float] = None
-    odds_btts_no: Optional[float] = None
-
-    # Flags
-    home_flag_url: Optional[str] = None
-    away_flag_url: Optional[str] = None
+    @property
+    def teams(self) -> tuple[str, str]:
+        return self.home_team, self.away_team
 
 
-_TEAM_NAME_MAP: dict[str, str] = {
-    "Bosnia & Herzegovina": "Bosnia and Herzegovina",
-    "Türkiye": "Turkey",
-    "Korea Republic": "South Korea",
-    "IR Iran": "Iran",
-    "USA": "United States",
-    "Côte d'Ivoire": "Ivory Coast",
-    "Cabo Verde": "Cape Verde",
-    "Congo DR": "DR Congo",
-}
+@dataclass
+class OddsFetch:
+    events: list[OddsEvent] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    requests_used: int = 0
+    requests_remaining: int | None = None
 
 
-def _normalize_team_name(name: str) -> str:
-    return _TEAM_NAME_MAP.get(name, name)
-
-
-def _team_to_flag_url(team_name: str) -> str:
-    FLAG_MAP: dict[str, str] = {
-        # ── CONMEBOL (6) ──────────────────────────────────────────────────────
-        "argentina": "ar",
-        "brazil": "br",
-        "colombia": "co",
-        "ecuador": "ec",
-        "paraguay": "py",
-        "uruguay": "uy",
-        # ── CONCACAF (6) ─────────────────────────────────────────────────────
-        "canada": "ca",
-        "mexico": "mx",
-        "united states": "us",
-        "usa": "us",
-        "curaçao": "cw",
-        "curacao": "cw",
-        "haiti": "ht",
-        "panama": "pa",
-        # ── UEFA (16) ─────────────────────────────────────────────────────────
-        "austria": "at",
-        "belgium": "be",
-        "bosnia and herzegovina": "ba",
-        "bosnia & herzegovina": "ba",
-        "croatia": "hr",
-        "czechia": "cz",
-        "czech republic": "cz",
-        "england": "gb-eng",
-        "france": "fr",
-        "germany": "de",
-        "netherlands": "nl",
-        "norway": "no",
-        "portugal": "pt",
-        "scotland": "gb-sct",
-        "spain": "es",
-        "sweden": "se",
-        "switzerland": "ch",
-        "türkiye": "tr",
-        "turkey": "tr",
-        # ── AFC (9) ───────────────────────────────────────────────────────────
-        "australia": "au",
-        "iraq": "iq",
-        "iran": "ir",
-        "ir iran": "ir",
-        "japan": "jp",
-        "jordan": "jo",
-        "south korea": "kr",
-        "korea republic": "kr",
-        "qatar": "qa",
-        "saudi arabia": "sa",
-        "uzbekistan": "uz",
-        # ── CAF (10) ──────────────────────────────────────────────────────────
-        "algeria": "dz",
-        "cabo verde": "cv",
-        "cape verde": "cv",
-        "dr congo": "cd",
-        "congo dr": "cd",
-        "ivory coast": "ci",
-        "côte d'ivoire": "ci",
-        "cote d'ivoire": "ci",
-        "egypt": "eg",
-        "ghana": "gh",
-        "morocco": "ma",
-        "senegal": "sn",
-        "south africa": "za",
-        "tunisia": "tn",
-        # ── OFC (1) ───────────────────────────────────────────────────────────
-        "new zealand": "nz",
-    }
-    code = FLAG_MAP.get(team_name.lower())
-    return f"https://flagcdn.com/{code}.svg" if code else ""
+def _api_key() -> str:
+    key = settings.odds_api_key.strip()
+    if not key:
+        raise OddsUnavailable("ODDS_API_KEY is not configured on the server.")
+    return key
 
 
 def _preferred_bookmakers() -> set[str]:
-    raw = os.getenv("ODDS_API_BOOKMAKERS", "")
-    return {k.strip() for k in raw.split(",") if k.strip()}
+    return {book.strip() for book in settings.odds_api_bookmakers if book.strip()}
 
 
-def _parse_h2h(
-    bookmakers: list[dict], home_team: str, away_team: str
-) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    home_p, draw_p, away_p = [], [], []
+def _iter_markets(bookmakers: list[dict], wanted: str):
+    """Yield outcomes of one market across every bookmaker we accept."""
     preferred = _preferred_bookmakers()
-
-    for bm in bookmakers:
-        if preferred and bm.get("key") not in preferred:
+    for bookmaker in bookmakers:
+        if preferred and bookmaker.get("key") not in preferred:
             continue
-        for market in bm.get("markets", []):
-            if market.get("key") != "h2h":
+        for market in bookmaker.get("markets", []):
+            if market.get("key") != wanted:
                 continue
-            for outcome in market.get("outcomes", []):
-                name = _normalize_team_name(outcome.get("name", "")).lower()
-                price = outcome.get("price", 0.0)
-                if name == home_team.lower():
-                    home_p.append(price)
-                elif name == away_team.lower():
-                    away_p.append(price)
-                elif name == "draw":
-                    draw_p.append(price)
-
-    if not home_p or not away_p or not draw_p:
-        return None, None, None
-
-    return (
-        round(sum(home_p) / len(home_p), 3),
-        round(sum(draw_p) / len(draw_p), 3),
-        round(sum(away_p) / len(away_p), 3),
-    )
+            yield from market.get("outcomes", [])
 
 
-def _parse_totals(bookmakers: list[dict]) -> dict[str, Optional[float]]:
+def _average(prices: list[float]) -> float | None:
+    """Mean price across books. None when nothing quoted — never 0.0, which
+    would read downstream as a real price of zero."""
+    return round(sum(prices) / len(prices), 3) if prices else None
+
+
+def _parse_h2h(bookmakers: list[dict], home: str, away: str) -> tuple[list[float], ...]:
+    home_prices: list[float] = []
+    draw_prices: list[float] = []
+    away_prices: list[float] = []
+
+    for outcome in _iter_markets(bookmakers, "h2h"):
+        name = (outcome.get("name") or "").strip()
+        price = outcome.get("price")
+        if not isinstance(price, (int, float)) or price <= 1:
+            continue
+        # Both sides of this comparison come from The Odds API, so the names
+        # are identical by construction — no normalisation needed here.
+        if name == home:
+            home_prices.append(float(price))
+        elif name == away:
+            away_prices.append(float(price))
+        elif name.lower() == "draw":
+            draw_prices.append(float(price))
+
+    return home_prices, draw_prices, away_prices
+
+
+def _parse_totals(bookmakers: list[dict]) -> dict[str, float | None]:
     buckets: dict[str, list[float]] = {
         "over_1_5": [],
         "under_1_5": [],
@@ -180,170 +128,172 @@ def _parse_totals(bookmakers: list[dict]) -> dict[str, Optional[float]]:
         "over_3_5": [],
         "under_3_5": [],
     }
-    preferred = _preferred_bookmakers()
 
-    for bm in bookmakers:
-        if preferred and bm.get("key") not in preferred:
+    for outcome in _iter_markets(bookmakers, "totals"):
+        name = (outcome.get("name") or "").lower()
+        point = outcome.get("point")
+        price = outcome.get("price")
+        if point not in (1.5, 2.5, 3.5) or name not in ("over", "under"):
             continue
-        for market in bm.get("markets", []):
-            if market.get("key") != "totals":
-                continue
-            for outcome in market.get("outcomes", []):
-                name = outcome.get("name", "").lower()
-                point = outcome.get("point")
-                price = outcome.get("price", 0.0)
-                if point not in (1.5, 2.5, 3.5):
-                    continue
-                key = f"{name}_{str(point).replace('.', '_')}"
-                if key in buckets:
-                    buckets[key].append(price)
-
-    return {k: round(sum(v) / len(v), 3) if v else None for k, v in buckets.items()}
-
-
-def _parse_btts(bookmakers: list[dict]) -> tuple[Optional[float], Optional[float]]:
-    yes_p, no_p = [], []
-    preferred = _preferred_bookmakers()
-
-    for bm in bookmakers:
-        if preferred and bm.get("key") not in preferred:
+        if not isinstance(price, (int, float)) or price <= 1:
             continue
-        for market in bm.get("markets", []):
-            if market.get("key") != "btts":
-                continue
-            for outcome in market.get("outcomes", []):
-                name = outcome.get("name", "").lower()
-                price = outcome.get("price", 0.0)
-                if name == "yes":
-                    yes_p.append(price)
-                elif name == "no":
-                    no_p.append(price)
+        buckets[f"{name}_{str(point).replace('.', '_')}"].append(float(price))
 
-    yes = round(sum(yes_p) / len(yes_p), 3) if yes_p else None
-    no = round(sum(no_p) / len(no_p), 3) if no_p else None
-    return yes, no
+    return {key: _average(prices) for key, prices in buckets.items()}
 
 
-def _merge_bookmakers(existing: dict, new_event: dict) -> None:
+def _parse_btts(bookmakers: list[dict]) -> tuple[float | None, float | None]:
+    yes_prices: list[float] = []
+    no_prices: list[float] = []
+
+    for outcome in _iter_markets(bookmakers, "btts"):
+        name = (outcome.get("name") or "").lower()
+        price = outcome.get("price")
+        if not isinstance(price, (int, float)) or price <= 1:
+            continue
+        if name == "yes":
+            yes_prices.append(float(price))
+        elif name == "no":
+            no_prices.append(float(price))
+
+    return _average(yes_prices), _average(no_prices)
+
+
+def _merge_bookmakers(target: dict, incoming: dict) -> None:
+    """Fold one market's response into an event already holding another.
+
+    Each market is a separate request, so an event accumulates its markets
+    across calls. Splitting them this way means one unsupported market cannot
+    take the others down with it.
     """
-    Merge bookmaker market data from new_event into existing in-place.
-    Each market (h2h, totals, btts) comes from a separate API call —
-    this combines them so all three are available on a single event dict.
-    """
-    existing_bms = {bm["key"]: bm for bm in existing.get("bookmakers", [])}
-
-    for bm in new_event.get("bookmakers", []):
-        key = bm["key"]
-        if key in existing_bms:
-            existing_bms[key]["markets"].extend(bm.get("markets", []))
+    existing = {book["key"]: book for book in target.get("bookmakers", [])}
+    for book in incoming.get("bookmakers", []):
+        key = book["key"]
+        if key in existing:
+            existing[key].setdefault("markets", []).extend(book.get("markets", []))
         else:
-            existing_bms[key] = bm
+            existing[key] = book
+    target["bookmakers"] = list(existing.values())
 
-    existing["bookmakers"] = list(existing_bms.values())
+
+async def _fetch_market(
+    client: httpx.AsyncClient, sport_key: str, market: str
+) -> tuple[list[dict], int | None]:
+    region = _BTTS_REGION if market == "btts" else settings.odds_api_region
+    response = await client.get(
+        f"{_ODDS_API_BASE}/sports/{sport_key}/odds/",
+        params={
+            "apiKey": _api_key(),
+            "regions": region,
+            "markets": market,
+            "oddsFormat": "decimal",
+        },
+    )
+    if response.status_code in (401, 403):
+        raise OddsUnavailable(f"The Odds API rejected the API key (HTTP {response.status_code}).")
+    if response.status_code == 429:
+        raise OddsUnavailable("The Odds API request quota is exhausted (HTTP 429).")
+    response.raise_for_status()
+
+    remaining = response.headers.get("x-requests-remaining")
+    return response.json(), int(remaining) if remaining and remaining.isdigit() else None
 
 
-async def fetch_todays_odds() -> list[MatchOdds]:
-    api_key = os.getenv("ODDS_API_KEY", "")
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ODDS_API_KEY is not configured on the server.",
-        )
-
-    sport = os.getenv("ODDS_API_SPORT", _DEFAULT_SPORT)
-    region = os.getenv("ODDS_API_REGION", _DEFAULT_REGION)
-
-    target_tz = ZoneInfo("America/Managua")
-    today_local = datetime.now(target_tz).date()
+async def fetch_odds(competitions: set[str]) -> OddsFetch:
+    """Fetch prices for every configured competition that has a sport key."""
+    result = OddsFetch()
+    markets = [market for market in settings.odds_api_markets if market.strip()]
+    if not markets:
+        result.warnings.append("No odds markets configured; fixtures will be stored unpriced.")
+        return result
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-
-        # ── Step 1: all fixtures for today (no odds yet, just schedule) ───────
-        try:
-            events_resp = await client.get(
-                f"{_ODDS_API_BASE}/sports/{sport}/events/",
-                params={"apiKey": api_key},
-            )
-            events_resp.raise_for_status()
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="The Odds API timed out.")
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"The Odds API returned HTTP {exc.response.status_code}.",
-            )
-        except httpx.RequestError as exc:
-            raise HTTPException(status_code=502, detail=f"Could not reach The Odds API: {exc}")
-
-        # ── Step 2: fetch each market separately ──────────────────────────────
-        # Splitting into three calls means one unsupported market (e.g. btts)
-        # won't silently kill the entire odds response.
-        odds_by_id: dict[str, dict] = {}
-
-        for market in ["h2h", "totals", "btts"]:
-            region_for_market = "uk" if market == "btts" else region
-            try:
-                resp = await client.get(
-                    f"{_ODDS_API_BASE}/sports/{sport}/odds/",
-                    params={
-                        "apiKey": api_key,
-                        "regions": region_for_market,
-                        "markets": market,
-                        "oddsFormat": "decimal",
-                    },
+        for competition_id in sorted(competitions):
+            sport_key = sport_key_for(competition_id)
+            if sport_key is None:
+                result.warnings.append(
+                    f"{competition_id} has no Odds API sport key; its fixtures stay unpriced."
                 )
-                resp.raise_for_status()
-                for event in resp.json():
-                    event_id = event["id"]
-                    if event_id not in odds_by_id:
-                        odds_by_id[event_id] = event
+                continue
+
+            events_by_id: dict[str, dict] = {}
+
+            for market in markets:
+                try:
+                    payload, remaining = await _fetch_market(client, sport_key, market)
+                    result.requests_used += 1
+                    if remaining is not None:
+                        result.requests_remaining = remaining
+                except OddsUnavailable:
+                    # Key or quota problems affect every league, so stop rather
+                    # than burning the remainder of the budget on failures.
+                    raise
+                except Exception as exc:
+                    result.warnings.append(
+                        f"Could not fetch '{market}' odds for {competition_id}: {exc}"
+                    )
+                    continue
+
+                for event in payload:
+                    event_id = event.get("id")
+                    if not event_id:
+                        continue
+                    if event_id in events_by_id:
+                        _merge_bookmakers(events_by_id[event_id], event)
                     else:
-                        _merge_bookmakers(odds_by_id[event_id], event)
-                log.info(f"✅ {market} odds fetched for {len(resp.json())} events.")
-            except Exception as e:
-                # Log and continue — other markets are still usable
-                log.warning(f"⚠️  Could not fetch '{market}' odds: {e}")
+                        events_by_id[event_id] = event
 
-    # ── Step 3: build MatchOdds for each event scheduled today ───────────────
-    results: list[MatchOdds] = []
+            for event in events_by_id.values():
+                parsed = _build_event(event, competition_id)
+                if parsed is not None:
+                    result.events.append(parsed)
 
-    for event in events_resp.json():
-        commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
-        match_date_local = commence_time.astimezone(target_tz).date()
-        match_time_local = commence_time.astimezone(target_tz)
-
-        if match_date_local != today_local:
-            continue
-
-        home_team = _normalize_team_name(event["home_team"])
-        away_team = _normalize_team_name(event["away_team"])
-
-        bookmakers = odds_by_id.get(event["id"], {}).get("bookmakers", [])
-
-        odds_home, odds_draw, odds_away = _parse_h2h(bookmakers, home_team, away_team)
-        totals = _parse_totals(bookmakers)
-        btts_yes, btts_no = _parse_btts(bookmakers)
-
-        results.append(
-            MatchOdds(
-                home_team=home_team,
-                away_team=away_team,
-                match_date=today_local,
-                commence_time=match_time_local,
-                odds_home=odds_home,
-                odds_draw=odds_draw,
-                odds_away=odds_away,
-                odds_over_1_5=totals["over_1_5"],
-                odds_under_1_5=totals["under_1_5"],
-                odds_over_2_5=totals["over_2_5"],
-                odds_under_2_5=totals["under_2_5"],
-                odds_over_3_5=totals["over_3_5"],
-                odds_under_3_5=totals["under_3_5"],
-                odds_btts_yes=btts_yes,
-                odds_btts_no=btts_no,
-                home_flag_url=_team_to_flag_url(home_team),
-                away_flag_url=_team_to_flag_url(away_team),
+            log.info(
+                "Fetched %d priced event(s) for %s.",
+                sum(1 for e in result.events if e.competition_id == competition_id),
+                competition_id,
             )
-        )
 
-    return results
+    if result.requests_remaining is not None:
+        log.info("The Odds API quota remaining: %s", result.requests_remaining)
+
+    return result
+
+
+def _build_event(event: dict, competition_id: str) -> OddsEvent | None:
+    raw_time = event.get("commence_time")
+    home = event.get("home_team")
+    away = event.get("away_team")
+    if not raw_time or not home or not away:
+        return None
+
+    try:
+        commence_time = datetime.fromisoformat(str(raw_time).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if commence_time.tzinfo is None:
+        commence_time = commence_time.replace(tzinfo=UTC)
+
+    bookmakers = event.get("bookmakers", [])
+    home_prices, draw_prices, away_prices = _parse_h2h(bookmakers, home, away)
+    totals = _parse_totals(bookmakers)
+    btts_yes, btts_no = _parse_btts(bookmakers)
+
+    return OddsEvent(
+        event_id=str(event["id"]),
+        competition_id=competition_id,
+        home_team=home,
+        away_team=away,
+        commence_time=commence_time.astimezone(UTC),
+        odds_home=_average(home_prices),
+        odds_draw=_average(draw_prices),
+        odds_away=_average(away_prices),
+        odds_over_1_5=totals["over_1_5"],
+        odds_under_1_5=totals["under_1_5"],
+        odds_over_2_5=totals["over_2_5"],
+        odds_under_2_5=totals["under_2_5"],
+        odds_over_3_5=totals["over_3_5"],
+        odds_under_3_5=totals["under_3_5"],
+        odds_btts_yes=btts_yes,
+        odds_btts_no=btts_no,
+    )
