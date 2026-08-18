@@ -25,6 +25,7 @@ from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 import api.core.audit  # noqa: F401,E402  registers tables on the metadata
 import api.core.auth.models  # noqa: F401,E402  registers tables on the metadata
 import api.portfolio.models  # noqa: F401,E402  registers tables on the metadata
+import api.statpitch.models  # noqa: F401,E402  registers tables on the metadata
 from api.core.config import settings  # noqa: E402
 from api.core.database import get_session  # noqa: E402
 from main import app  # noqa: E402
@@ -150,6 +151,63 @@ def project_fixture(create, seed) -> int:
         project_type_id=seed["project_type"],
         difficulty_level_id=seed["difficulty_level"],
     )["id"]
+
+
+@pytest.fixture(name="make_fixture")
+def make_fixture_factory():
+    """Build a `StatPitchFixture` with plausible defaults.
+
+    Probabilities are internally consistent (the 1X2 three sum to 1), so a test
+    that only cares about odds does not have to restate the prediction.
+    """
+    from api.statpitch.clock import today_local
+    from api.statpitch.models import StatPitchFixture
+
+    counter = {"n": 0}
+
+    def _make(**overrides):
+        counter["n"] += 1
+        today = today_local()
+        defaults = {
+            "fixture_id": f"ESP.LALIGA|2026-2027|Home {counter['n']}|Away {counter['n']}",
+            "competition_id": "ESP.LALIGA",
+            "match_date": today,
+            "source_date": today,
+            "home_team": f"Home {counter['n']}",
+            "away_team": f"Away {counter['n']}",
+            "model_version": "goals-test-0001",
+            "home_xg": 1.8,
+            "away_xg": 1.0,
+            "home_win_prob": 0.55,
+            "draw_prob": 0.25,
+            "away_win_prob": 0.20,
+            "over_1_5": 0.78,
+            "over_2_5": 0.55,
+            "over_3_5": 0.32,
+            "btts_yes": 0.57,
+            "btts_no": 0.43,
+        }
+        defaults.update(overrides)
+        return StatPitchFixture(**defaults)
+
+    return _make
+
+
+@pytest.fixture(name="seed_fixtures")
+def seed_fixtures_factory(engine, make_fixture):
+    """Persist fixtures and return them, refreshed."""
+    from sqlmodel import Session
+
+    def _seed(*fixtures):
+        with Session(engine) as db:
+            for fixture in fixtures:
+                db.add(fixture)
+            db.commit()
+            for fixture in fixtures:
+                db.refresh(fixture)
+        return list(fixtures)
+
+    return _seed
 
 
 @pytest.fixture(name="queries")

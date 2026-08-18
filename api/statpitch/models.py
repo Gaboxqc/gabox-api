@@ -1,127 +1,252 @@
-from datetime import date, datetime
-from typing import List, Literal, Optional
+"""StatPitch domain models.
 
-from pydantic import BaseModel
-from sqlalchemy import UniqueConstraint
+Two tables, deliberately separated by lifetime:
+
+`statpitch_fixture` is a **cache**. It holds the three days the frontend shows
+(yesterday, today, tomorrow in Nicaragua time) and is pruned past that. Nothing
+in it is a permanent record.
+
+`statpitch_settled_bet` is a **ledger**. One narrow, immutable row per settled
+selection, written just before its fixture is pruned. It is what the 7- and
+30-day ROI is computed from, which is the only reason those windows survive a
+three-day retention policy at all.
+"""
+
+from datetime import UTC, date, datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict
+from pydantic import Field as PydanticField
+from sqlalchemy import Column, UniqueConstraint
+from sqlalchemy.types import JSON
 from sqlmodel import Field, SQLModel
 
 # ==============================================================================
-# ML API RESPONSE SCHEMAS
+# STATPITCH API RESPONSE SCHEMAS
 # ==============================================================================
+# StatPitch promises never to rename, remove or retype an existing field, and
+# asks clients to ignore unknown ones rather than validate against a closed
+# schema. Every model here is therefore extra="ignore".
+
+_IGNORE_EXTRA = ConfigDict(extra="ignore", populate_by_name=True)
 
 
-class MLExpectedGoals(BaseModel):
+class SPProbabilities(BaseModel):
+    model_config = _IGNORE_EXTRA
+
+    home: float
+    draw: float
+    away: float
+
+
+class SPExpectedGoals(BaseModel):
+    model_config = _IGNORE_EXTRA
+
     home: float
     away: float
 
 
-class MLTeamInfo(BaseModel):
-    home_elo: float
-    away_elo: float
-    elo_diff: float
-    h2h_games: int
-    h2h_home_wins: float
+class SPOverUnder(BaseModel):
+    """Note the dotted JSON keys — `over_1.5`, not `over_1_5`."""
+
+    model_config = _IGNORE_EXTRA
+
+    over_1_5: float = PydanticField(alias="over_1.5")
+    over_2_5: float = PydanticField(alias="over_2.5")
+    over_3_5: float = PydanticField(alias="over_3.5")
 
 
-class MLMatchResult(BaseModel):
-    home_win: float
-    draw: float
-    away_win: float
+class SPCorrectScore(BaseModel):
+    model_config = _IGNORE_EXTRA
+
+    home: int
+    away: int
+    probability: float
 
 
-class MLOverUnder(BaseModel):
-    over_1_5: float
-    over_2_5: float
-    over_3_5: float
+class SPRating(BaseModel):
+    model_config = _IGNORE_EXTRA
+
+    elo: float | None = None
+    # club_elo | entrant_prior | pooled_prior | default
+    source: str | None = None
 
 
-class MLBtts(BaseModel):
-    yes: float
-    no: float
+class SPRatings(BaseModel):
+    model_config = _IGNORE_EXTRA
+
+    home: SPRating = SPRating()
+    away: SPRating = SPRating()
 
 
-class MLPredictionResponse(BaseModel):
+class SPPrediction(BaseModel):
+    model_config = _IGNORE_EXTRA
+
+    probabilities: SPProbabilities
+    expected_goals: SPExpectedGoals
+    over_under: SPOverUnder
+    # A single float — P(both teams score). There is no `no` counterpart.
+    btts: float
+    correct_scores: list[SPCorrectScore] = []
+    ratings: SPRatings = SPRatings()
+    # False means a club fell back to a prior instead of a measured Elo. The
+    # number is still well formed; it is a much weaker claim.
+    fully_rated: bool = True
+    odds_coverage: bool = False
+
+
+class SPFixture(BaseModel):
+    model_config = _IGNORE_EXTRA
+
+    fixture_id: str
+    competition_id: str
+    season: str | None = None
+    stage: str | None = None
+    format: str | None = None
+    date: date
+    # A bare "20:00" with no zone, or null. Not a timestamp — see
+    # `StatPitchFixture.commence_time` for the instant we actually schedule on.
+    kickoff: str | None = None
+    date_confirmed: bool = False
     home_team: str
     away_team: str
-    expected_goals: MLExpectedGoals
-    team_info: MLTeamInfo
-    model_version: str
-    match_result: MLMatchResult
-    over_under: MLOverUnder
-    btts: MLBtts
+    neutral_venue: bool = False
+    odds_coverage: bool = False
+    prediction: SPPrediction | None = None
+    prediction_source: str | None = None
+    prediction_model_version: str | None = None
+    explanation: dict[str, Any] | None = None
+
+
+class SPRefusal(BaseModel):
+    model_config = _IGNORE_EXTRA
+
+    available: bool = False
+    reason_code: str | None = None
+    reason: str | None = None
+    measurement: dict[str, Any] | None = None
+
+
+class SPFixturesPage(BaseModel):
+    model_config = _IGNORE_EXTRA
+
+    fixtures: list[SPFixture] = []
+    count: int = 0
+    total: int = 0
+    offset: int = 0
+    limit: int = 0
+    generated_at_source: str | None = None
+    model_version: str | None = None
+    config_version: str | None = None
+    # A refusal is a 200, not an error. NO_FIXTURE_SOURCE here means a broken
+    # deploy upstream, which is not the same as a quiet day with no fixtures.
+    refusal: SPRefusal | None = None
+
+
+class SPHealth(BaseModel):
+    model_config = _IGNORE_EXTRA
+
+    status: str
+    ready: bool = False
+    artifacts_loaded: bool = False
+    model_version: str | None = None
+    config_version: str | None = None
+    error: str | None = None
 
 
 # ==============================================================================
-# REQUEST SCHEMAS
+# SELECTIONS
+# ==============================================================================
+
+# Every selection we are able to price and settle. The 1X2 three settle from
+# the match outcome; the rest need the actual goal counts.
+Selection = Literal[
+    "home_win",
+    "draw",
+    "away_win",
+    "over_1_5",
+    "under_1_5",
+    "over_2_5",
+    "under_2_5",
+    "over_3_5",
+    "under_3_5",
+    "btts_yes",
+    "btts_no",
+]
+
+# Which of the two parallel track records a ledger row belongs to.
+#   "1x2"     — the best 1X2 pick only
+#   "overall" — the best Kelly-filtered pick across every market
+BetBasis = Literal["1x2", "overall"]
+
+
+# ==============================================================================
+# FIXTURE CACHE  (pruned to a three-day window)
 # ==============================================================================
 
 
-class MatchPredictionCreate(SQLModel):
-    home_team: str = Field(min_length=2)
-    away_team: str = Field(min_length=2)
-    match_date: Optional[date] = None
-    is_neutral: bool = True
-    home_flag_url: Optional[str] = None
-    away_flag_url: Optional[str] = None
-    odds_home: Optional[float] = Field(default=None, gt=1.0)
-    odds_draw: Optional[float] = Field(default=None, gt=1.0)
-    odds_away: Optional[float] = Field(default=None, gt=1.0)
+class StatPitchFixture(SQLModel, table=True):
+    """One scheduled fixture, its StatPitch prediction, and our own pricing.
 
-
-class MatchPredictionBatchCreate(SQLModel):
-    matches: List[MatchPredictionCreate]
-    match_date: Optional[date] = None
-
-
-class MatchResultUpdate(BaseModel):
-    actual_result: Literal["home_win", "draw", "away_win"]
-
-
-# ==============================================================================
-# TABLE MODEL
-# ==============================================================================
-
-
-class MatchPrediction(SQLModel, table=True):
+    Keyed on `fixture_id`, which StatPitch builds *without* the date so a
+    postponed match keeps its identity rather than appearing as a new fixture
+    plus a vanished one. `match_date` is an attribute that can change.
     """
-    One row per match. Stores ML probabilities, casino odds, Expected Value,
-    and Kelly Criterion stake for every market (1X2, over/under, BTTS).
 
-    EV  = (probability × odds) - 1         → is there edge?
-    Kelly = (probability × odds - 1) / (odds - 1)  → how much to bet?
+    __tablename__: str = "statpitch_fixture"
+    __table_args__ = (UniqueConstraint("fixture_id", name="uq_statpitch_fixture_id"),)
 
-    best_overall_bet picks the highest-Kelly outcome across all markets
-    that passes the minimum Kelly threshold. Raw EV alone is not enough —
-    a +150% EV on a 5% probability event has tiny Kelly and is not worth
-    the variance.
-    """
+    id: int | None = Field(default=None, primary_key=True)
 
-    __tablename__: str = "statpitch_match_prediction"
-    __table_args__ = (
-        UniqueConstraint("match_date", "home_team", "away_team", name="uq_match_date_teams"),
-    )
+    # ── Identity ──────────────────────────────────────────────────────────────
+    fixture_id: str = Field(index=True)
+    competition_id: str = Field(index=True)
+    season: str | None = Field(default=None)
+    stage: str | None = Field(default=None)
+    format: str | None = Field(default=None)
 
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    # ── Match identity ────────────────────────────────────────────────────────
+    # ── Scheduling ────────────────────────────────────────────────────────────
+    # The Nicaragua-local day this fixture is filed under. Every "today" query
+    # in the app compares against this, never against a UTC date.
     match_date: date = Field(index=True)
-    commence_time: Optional[datetime] = Field(default=None)
+    # StatPitch's own nominal date, kept so a shifted fixture is diagnosable.
+    source_date: date
+    kickoff: str | None = Field(default=None)
+    # Real UTC instant, from The Odds API. Null when we could not match the
+    # fixture to an odds event — then match_date falls back to source_date.
+    commence_time: datetime | None = Field(default=None)
+    # True only when the schedule published a kickoff time, which is the signal
+    # the date is real. False for roughly 88% of the list: those sit on a
+    # matchday placeholder and must not be rendered as a specific day.
+    date_confirmed: bool = Field(default=False)
+
     home_team: str
     away_team: str
-    is_neutral: bool = Field(default=True)
-    home_flag_url: Optional[str] = Field(default=None)
-    away_flag_url: Optional[str] = Field(default=None)
-    model_version: str
-    predicted_at: datetime = Field(default_factory=datetime.utcnow)
+    neutral_venue: bool = Field(default=False)
+    # StatPitch's flag for whether *it* has an odds source. We price from The
+    # Odds API independently, so this is informational, not a gate.
+    odds_coverage: bool = Field(default=False)
 
-    # ── ML probabilities ──────────────────────────────────────────────────────
+    # Null until a crest source is wired up — StatPitch does not supply one.
+    home_crest_url: str | None = Field(default=None)
+    away_crest_url: str | None = Field(default=None)
+
+    # ── Provenance ────────────────────────────────────────────────────────────
+    # fitted_goal_model, or elo-poisson for the measurably weaker fallback.
+    prediction_source: str | None = Field(default=None)
+    model_version: str
+    config_version: str | None = Field(default=None)
+    # False means a club had no measured Elo and fell back to a prior.
+    fully_rated: bool = Field(default=True)
+    synced_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    # ── Prediction ────────────────────────────────────────────────────────────
     home_xg: float
     away_xg: float
-    home_elo: float
-    away_elo: float
-    elo_diff: float
-    h2h_games: int
-    h2h_home_wins: float
+    home_elo: float | None = Field(default=None)
+    away_elo: float | None = Field(default=None)
+    home_elo_source: str | None = Field(default=None)
+    away_elo_source: str | None = Field(default=None)
     home_win_prob: float
     draw_prob: float
     away_win_prob: float
@@ -131,56 +256,122 @@ class MatchPrediction(SQLModel, table=True):
     btts_yes: float
     btts_no: float
 
-    # ── 1X2 ──────────────────────────────────────────────────────────────────
-    odds_home: Optional[float] = Field(default=None)
-    odds_draw: Optional[float] = Field(default=None)
-    odds_away: Optional[float] = Field(default=None)
-    ev_home: Optional[float] = Field(default=None)
-    ev_draw: Optional[float] = Field(default=None)
-    ev_away: Optional[float] = Field(default=None)
-    kelly_home: Optional[float] = Field(default=None)
-    kelly_draw: Optional[float] = Field(default=None)
-    kelly_away: Optional[float] = Field(default=None)
-    best_bet: Optional[str] = Field(default=None)  # best 1X2 pick by Kelly
+    correct_scores: list[dict[str, Any]] | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    explanation: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
-    # ── Over/Under ────────────────────────────────────────────────────────────
-    odds_over_1_5: Optional[float] = Field(default=None)
-    odds_under_1_5: Optional[float] = Field(default=None)
-    odds_over_2_5: Optional[float] = Field(default=None)
-    odds_under_2_5: Optional[float] = Field(default=None)
-    odds_over_3_5: Optional[float] = Field(default=None)
-    odds_under_3_5: Optional[float] = Field(default=None)
-    ev_over_1_5: Optional[float] = Field(default=None)
-    ev_under_1_5: Optional[float] = Field(default=None)
-    ev_over_2_5: Optional[float] = Field(default=None)
-    ev_under_2_5: Optional[float] = Field(default=None)
-    ev_over_3_5: Optional[float] = Field(default=None)
-    ev_under_3_5: Optional[float] = Field(default=None)
-    kelly_over_1_5: Optional[float] = Field(default=None)
-    kelly_under_1_5: Optional[float] = Field(default=None)
-    kelly_over_2_5: Optional[float] = Field(default=None)
-    kelly_under_2_5: Optional[float] = Field(default=None)
-    kelly_over_3_5: Optional[float] = Field(default=None)
-    kelly_under_3_5: Optional[float] = Field(default=None)
+    # ── Odds ──────────────────────────────────────────────────────────────────
+    odds_home: float | None = Field(default=None)
+    odds_draw: float | None = Field(default=None)
+    odds_away: float | None = Field(default=None)
+    odds_over_1_5: float | None = Field(default=None)
+    odds_under_1_5: float | None = Field(default=None)
+    odds_over_2_5: float | None = Field(default=None)
+    odds_under_2_5: float | None = Field(default=None)
+    odds_over_3_5: float | None = Field(default=None)
+    odds_under_3_5: float | None = Field(default=None)
+    odds_btts_yes: float | None = Field(default=None)
+    odds_btts_no: float | None = Field(default=None)
 
-    # ── BTTS ─────────────────────────────────────────────────────────────────
-    odds_btts_yes: Optional[float] = Field(default=None)
-    odds_btts_no: Optional[float] = Field(default=None)
-    ev_btts_yes: Optional[float] = Field(default=None)
-    ev_btts_no: Optional[float] = Field(default=None)
-    kelly_btts_yes: Optional[float] = Field(default=None)
-    kelly_btts_no: Optional[float] = Field(default=None)
+    # ── EV and Kelly ──────────────────────────────────────────────────────────
+    ev_home: float | None = Field(default=None)
+    ev_draw: float | None = Field(default=None)
+    ev_away: float | None = Field(default=None)
+    ev_over_1_5: float | None = Field(default=None)
+    ev_under_1_5: float | None = Field(default=None)
+    ev_over_2_5: float | None = Field(default=None)
+    ev_under_2_5: float | None = Field(default=None)
+    ev_over_3_5: float | None = Field(default=None)
+    ev_under_3_5: float | None = Field(default=None)
+    ev_btts_yes: float | None = Field(default=None)
+    ev_btts_no: float | None = Field(default=None)
 
-    # ── Best overall pick ─────────────────────────────────────────────────────
-    # Highest fractional-Kelly bet across all markets that passes MIN_KELLY.
-    # best_overall_kelly is the FRACTIONAL Kelly (×0.25) — the actual % of
-    # bankroll the model recommends staking.
-    best_overall_bet: Optional[str] = Field(default=None)
-    best_overall_ev: Optional[float] = Field(default=None)
-    best_overall_kelly: Optional[float] = Field(default=None)
+    kelly_home: float | None = Field(default=None)
+    kelly_draw: float | None = Field(default=None)
+    kelly_away: float | None = Field(default=None)
+    kelly_over_1_5: float | None = Field(default=None)
+    kelly_under_1_5: float | None = Field(default=None)
+    kelly_over_2_5: float | None = Field(default=None)
+    kelly_under_2_5: float | None = Field(default=None)
+    kelly_over_3_5: float | None = Field(default=None)
+    kelly_under_3_5: float | None = Field(default=None)
+    kelly_btts_yes: float | None = Field(default=None)
+    kelly_btts_no: float | None = Field(default=None)
 
-    # ── Post-match ────────────────────────────────────────────────────────────
-    actual_result: Optional[str] = Field(default=None)
+    # ── Picks ─────────────────────────────────────────────────────────────────
+    # Best 1X2 pick by Kelly, and its price at sync time.
+    best_bet: str | None = Field(default=None)
+    best_bet_odds: float | None = Field(default=None)
+    best_bet_prob: float | None = Field(default=None)
+
+    # Best pick across every market that clears MIN_KELLY.
+    best_overall_bet: str | None = Field(default=None)
+    best_overall_odds: float | None = Field(default=None)
+    best_overall_prob: float | None = Field(default=None)
+    best_overall_ev: float | None = Field(default=None)
+    best_overall_kelly: float | None = Field(default=None)
+
+    # ── Result ────────────────────────────────────────────────────────────────
+    home_score: int | None = Field(default=None)
+    away_score: int | None = Field(default=None)
+    actual_result: str | None = Field(default=None)
+    settled_at: datetime | None = Field(default=None)
+    # Set once the ledger rows exist, so pruning can never drop a fixture whose
+    # track record was not banked first.
+    ledgered: bool = Field(default=False, index=True)
+
+
+# ==============================================================================
+# SETTLED BET LEDGER  (permanent)
+# ==============================================================================
+
+
+class StatPitchSettledBet(SQLModel, table=True):
+    """One settled selection. Append-only; never updated, never pruned.
+
+    Two rows per fixture at most — one per `basis` — so the 1X2-only record and
+    the multi-market Kelly record can be compared against each other rather
+    than silently averaged together.
+    """
+
+    __tablename__: str = "statpitch_settled_bet"
+    __table_args__ = (
+        UniqueConstraint("fixture_id", "basis", name="uq_statpitch_settled_fixture_basis"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    fixture_id: str = Field(index=True)
+    competition_id: str = Field(index=True)
+    home_team: str
+    away_team: str
+
+    # Nicaragua-local match day. ROI windows are measured against this, not
+    # against settlement time, so a late-recorded result lands in the right week.
+    match_date: date = Field(index=True)
+    settled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    basis: str = Field(index=True)
+    selection: str
+    probability: float
+    odds_taken: float
+
+    # Flat one unit, so ROI reads as return per unit staked and the two series
+    # stay comparable. The Kelly recommendation is kept alongside it rather
+    # than baked in, so a stake-weighted ROI can be derived later without
+    # rewriting history.
+    stake_units: float = Field(default=1.0)
+    kelly_fraction: float | None = Field(default=None)
+
+    won: bool
+    pnl_units: float
+
+    home_score: int
+    away_score: int
+    # Which model produced the probability. Predictions are immutable: a
+    # retrain writes new rows rather than reinterpreting settled ones.
+    model_version: str
 
 
 # ==============================================================================
@@ -188,26 +379,38 @@ class MatchPrediction(SQLModel, table=True):
 # ==============================================================================
 
 
-class MatchPredictionRead(SQLModel):
+class FixtureRead(SQLModel):
     id: int
+    fixture_id: str
+    competition_id: str
+    season: str | None
+    stage: str | None
+    format: str | None
+
     match_date: date
-    commence_time: Optional[datetime]
+    source_date: date
+    kickoff: str | None
+    commence_time: datetime | None
+    date_confirmed: bool
+
     home_team: str
     away_team: str
-    is_neutral: bool
-    home_flag_url: Optional[str]
-    away_flag_url: Optional[str]
-    model_version: str
-    predicted_at: datetime
+    neutral_venue: bool
+    odds_coverage: bool
+    home_crest_url: str | None
+    away_crest_url: str | None
 
-    # ML probabilities
+    prediction_source: str | None
+    model_version: str
+    fully_rated: bool
+    synced_at: datetime
+
     home_xg: float
     away_xg: float
-    home_elo: float
-    away_elo: float
-    elo_diff: float
-    h2h_games: int
-    h2h_home_wins: float
+    home_elo: float | None
+    away_elo: float | None
+    home_elo_source: str | None
+    away_elo_source: str | None
     home_win_prob: float
     draw_prob: float
     away_win_prob: float
@@ -216,67 +419,131 @@ class MatchPredictionRead(SQLModel):
     over_3_5: float
     btts_yes: float
     btts_no: float
+    correct_scores: list[dict[str, Any]] | None
+    explanation: dict[str, Any] | None
 
-    # 1X2
-    odds_home: Optional[float]
-    odds_draw: Optional[float]
-    odds_away: Optional[float]
-    ev_home: Optional[float]
-    ev_draw: Optional[float]
-    ev_away: Optional[float]
-    kelly_home: Optional[float]
-    kelly_draw: Optional[float]
-    kelly_away: Optional[float]
-    best_bet: Optional[str]
+    odds_home: float | None
+    odds_draw: float | None
+    odds_away: float | None
+    odds_over_1_5: float | None
+    odds_under_1_5: float | None
+    odds_over_2_5: float | None
+    odds_under_2_5: float | None
+    odds_over_3_5: float | None
+    odds_under_3_5: float | None
+    odds_btts_yes: float | None
+    odds_btts_no: float | None
 
-    # Over/Under
-    odds_over_1_5: Optional[float]
-    odds_under_1_5: Optional[float]
-    odds_over_2_5: Optional[float]
-    odds_under_2_5: Optional[float]
-    odds_over_3_5: Optional[float]
-    odds_under_3_5: Optional[float]
-    ev_over_1_5: Optional[float]
-    ev_under_1_5: Optional[float]
-    ev_over_2_5: Optional[float]
-    ev_under_2_5: Optional[float]
-    ev_over_3_5: Optional[float]
-    ev_under_3_5: Optional[float]
-    kelly_over_1_5: Optional[float]
-    kelly_under_1_5: Optional[float]
-    kelly_over_2_5: Optional[float]
-    kelly_under_2_5: Optional[float]
-    kelly_over_3_5: Optional[float]
-    kelly_under_3_5: Optional[float]
+    ev_home: float | None
+    ev_draw: float | None
+    ev_away: float | None
+    ev_over_1_5: float | None
+    ev_under_1_5: float | None
+    ev_over_2_5: float | None
+    ev_under_2_5: float | None
+    ev_over_3_5: float | None
+    ev_under_3_5: float | None
+    ev_btts_yes: float | None
+    ev_btts_no: float | None
 
-    # BTTS
-    odds_btts_yes: Optional[float]
-    odds_btts_no: Optional[float]
-    ev_btts_yes: Optional[float]
-    ev_btts_no: Optional[float]
-    kelly_btts_yes: Optional[float]
-    kelly_btts_no: Optional[float]
+    kelly_home: float | None
+    kelly_draw: float | None
+    kelly_away: float | None
+    kelly_over_1_5: float | None
+    kelly_under_1_5: float | None
+    kelly_over_2_5: float | None
+    kelly_under_2_5: float | None
+    kelly_over_3_5: float | None
+    kelly_under_3_5: float | None
+    kelly_btts_yes: float | None
+    kelly_btts_no: float | None
 
-    # Best overall
-    best_overall_bet: Optional[str]
-    best_overall_ev: Optional[float]
-    best_overall_kelly: Optional[float]
+    best_bet: str | None
+    best_bet_odds: float | None
+    best_bet_prob: float | None
+    best_overall_bet: str | None
+    best_overall_odds: float | None
+    best_overall_prob: float | None
+    best_overall_ev: float | None
+    best_overall_kelly: float | None
 
-    actual_result: Optional[str]
+    home_score: int | None
+    away_score: int | None
+    actual_result: str | None
 
 
-class DailyStatsRead(SQLModel):
-    predictions_today: int
+class SettledBetRead(SQLModel):
+    id: int
+    fixture_id: str
+    competition_id: str
+    home_team: str
+    away_team: str
+    match_date: date
+    settled_at: datetime
+    basis: str
+    selection: str
+    probability: float
+    odds_taken: float
+    stake_units: float
+    kelly_fraction: float | None
+    won: bool
+    pnl_units: float
+    home_score: int
+    away_score: int
+    model_version: str
+
+
+class WindowRoi(SQLModel):
+    """Flat-stake performance over one rolling window, for one basis."""
+
+    bets: int
+    wins: int
+    staked_units: float
+    returned_units: float
+    pnl_units: float
+    # None rather than 0.0 when nothing settled — an empty window has no ROI,
+    # and rendering it as break-even would be a claim we cannot make.
+    roi_pct: float | None
+    hit_rate_pct: float | None
+
+
+class BasisRoi(SQLModel):
+    basis: str
+    week: WindowRoi
+    month: WindowRoi
+
+
+class ThreeDayWindow(SQLModel):
+    yesterday: date
+    today: date
+    tomorrow: date
+
+
+class StatsRead(SQLModel):
+    """The stats bar: today's shape, plus rolling 7d/30d ROI per series."""
+
+    generated_for: date
+    timezone: str
+    window: ThreeDayWindow
+
+    fixtures_today: int
+    fixtures_tomorrow: int
+    date_confirmed_today: int
     high_confidence_today: int
     high_confidence_threshold: float
     value_bets_today: int
-    accuracy_30d: Optional[float]
-    roi_30d: Optional[float]
-    settled_matches_30d: int
+
+    roi: list[BasisRoi]
 
 
 class SyncResultRead(SQLModel):
-    synced: int
-    skipped: int
-    date: date
-    matches: List[MatchPredictionRead]
+    window: ThreeDayWindow
+    fetched: int
+    stored: int
+    priced: int
+    unmatched_odds: int
+    settled: int
+    ledgered: int
+    pruned: int
+    model_version: str | None
+    warnings: list[str] = []

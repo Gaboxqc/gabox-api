@@ -1,0 +1,49 @@
+name: StatPitch daily sync
+
+# 06:00 UTC is midnight in Nicaragua (UTC-6, no daylight saving), so the
+# three-day window rolls over exactly when the frontend's "today" does.
+#
+# This lives here rather than in vercel.json because Vercel Cron issues GET
+# requests and cannot attach a custom header, so it could not present the
+# X-API-KEY the sync endpoint requires.
+#
+# Two caveats worth knowing: GitHub delays scheduled runs under load, and it
+# disables schedules entirely after 60 days without repository activity. The
+# sync is idempotent, so a late or missed run is corrected by the next one.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger sync
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          API_MASTER_KEY: ${{ secrets.API_MASTER_KEY }}
+        run: |
+          if [ -z "$API_BASE_URL" ] || [ -z "$API_MASTER_KEY" ]; then
+            echo "::error::API_BASE_URL and API_MASTER_KEY must both be set as repository secrets."
+            exit 1
+          fi
+
+          # StatPitch runs on a free Render instance that sleeps after ~15
+          # minutes idle, so the first call pays a cold start of tens of
+          # seconds. --max-time covers that plus the odds and scores fetches.
+          response=$(curl --silent --show-error --max-time 300 \
+            --write-out "\n%{http_code}" \
+            --request POST "$API_BASE_URL/statpitch/sync" \
+            --header "X-API-KEY: $API_MASTER_KEY")
+
+          body=$(echo "$response" | sed '$d')
+          status=$(echo "$response" | tail -n1)
+
+          echo "$body"
+
+          if [ "$status" != "200" ]; then
+            echo "::error::Sync failed with HTTP $status"
+            exit 1
+          fi
