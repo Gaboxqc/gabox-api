@@ -26,8 +26,14 @@ class Settings(BaseSettings):
     # ── Optional ──────────────────────────────────────────────────────────────
     sql_echo: bool = False
     log_level: str = "INFO"
+    # Vite claims the next free port when 5173 is taken, so a second dev server
+    # lands on 5174 or 5175 and its requests would otherwise be refused by CORS
+    # with no hint as to why. Localhost only — nothing here widens the
+    # production surface.
     cors_origins: list[str] = [
         "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
         "http://localhost:8000",
         "https://gabrielmayorga.dev",
         "https://www.gabrielmayorga.dev",
