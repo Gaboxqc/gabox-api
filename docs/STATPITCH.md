@@ -7,6 +7,11 @@ The upstream prediction service has its own reference in the StatPitch repo
 (`docs/API.md`). This document covers **our** side: what we keep, for how long,
 and why the numbers mean what they mean.
 
+**`/openapi.json` is the authority on shapes.** Where this file and the schema
+disagree, the schema is right — it is generated from the models, this is written
+by hand. What you get here that the schema cannot express: which scale a number
+is on, which nulls are normal, and why.
+
 ---
 
 ## Contents
@@ -109,15 +114,113 @@ A fixture object has 81 fields, in seven groups.
 
 | Group | Fields | Notes |
 |---|---|---|
-| Identity | `id`, `fixture_id`, `competition_id`, `season`, `stage`, `format` | |
+| Identity | `id`, `fixture_id`, `competition_id`, `season`, `stage`, `format` | `id` is the numeric key `/fixtures/{id}` takes; `fixture_id` is the composite natural key |
 | Scheduling | `match_date`, `source_date`, `kickoff`, `commence_time`, `date_confirmed` | |
 | Teams | `home_team`, `away_team`, `neutral_venue`, `home_crest_url`, `away_crest_url` | |
-| Provenance | `prediction_source`, `model_version`, `fully_rated`, `synced_at` | |
-| Prediction | `home_xg`, `away_xg`, `*_elo`, `*_elo_source`, `home_win_prob`, `draw_prob`, `away_win_prob`, `over_*`, `btts_*`, `correct_scores`, `explanation` | |
-| Pricing | `odds_*`, `ev_*`, `kelly_*` across 11 markets | all null when unpriced |
-| Picks and result | `best_bet*`, `best_overall_*`, `home_score`, `away_score`, `actual_result` | |
+| Provenance | `prediction_source`, `model_version`, `fully_rated`, `synced_at`, `odds_coverage` | `model_version` is always present; `prediction_source` can be null |
+| Prediction | `home_xg`, `away_xg`, `*_elo`, `*_elo_source`, `home_win_prob`, `draw_prob`, `away_win_prob`, `over_1_5`, `over_2_5`, `over_3_5`, `btts_yes`, `btts_no`, `correct_scores`, `explanation` | eight probabilities — **there are no `under_*` probabilities**, see below |
+| Pricing | `odds_*`, `ev_*`, `kelly_*` across 11 markets | all null when unpriced; individually null per unquoted market |
+| Picks and result | `best_bet`, `best_bet_odds`, `best_bet_prob`, `best_overall_bet`, `best_overall_odds`, `best_overall_prob`, `best_overall_ev`, `best_overall_kelly`, `home_score`, `away_score`, `actual_result` | the two pick groups are **not** symmetric |
 
-### Five fields worth understanding before you render anything
+### Scales, and how to get them wrong
+
+This is the single most common source of a rendering bug, because the two
+scales look alike and neither is labelled.
+
+| Field | Scale | Example |
+|---|---|---|
+| `*_prob`, `over_*`, `btts_*`, `best_*_prob` | **0–1 fraction** | `0.7283` is 72.83% |
+| `ev_*`, `best_overall_ev` | **0–1 fraction** | `0.0617` is a **+6.17%** edge |
+| `kelly_*`, `best_overall_kelly` | **0–1 fraction** | `0.0049` stakes 0.49% of bankroll |
+| `high_confidence_threshold` | 0–1 fraction | `0.7` |
+| `roi_pct`, `hit_rate_pct` (on `/stats`) | **already 0–100** | `45.0` is +45% |
+
+So EV must be multiplied by 100 before display, and ROI must not be. Formatting
+`ev_away: 0.0617` as though it were already a percentage renders "0.06%" for
+what is actually a +6.17% edge.
+
+### Timestamps have no timezone suffix
+
+`commence_time` and `synced_at` are real UTC instants, but they serialise
+without a `Z` — `"2026-08-19T19:00:00"`, not `"2026-08-19T19:00:00Z"`.
+JavaScript reads an offsetless date-time as **local** time, so a client that
+parses these as-is shows every viewer outside UTC the wrong kick-off. Append the
+suffix before parsing.
+
+`match_date` and `source_date` are the opposite problem: bare calendar dates
+already resolved to `STATPITCH_TIMEZONE`. Parsing `"2026-08-19"` with a
+date-time constructor lands on UTC midnight, which renders as the 18th for any
+viewer behind UTC — including America/Managua, the zone it was resolved in.
+
+### Only the over lines carry a probability
+
+The model publishes `over_1_5`, `over_2_5` and `over_3_5` and no unders: the
+under probability is the complement, `1 - over_x`. The unders **do** have their
+own `odds_under_*`, `ev_under_*` and `kelly_under_*`, so an under row is a
+derived probability against a real quoted price. There is no `under_1_5` field
+to read, and asking for one is the fastest way to a crash.
+
+### The two pick groups are not symmetric
+
+`best_bet` is the best 1X2 selection and carries `best_bet_odds` and
+`best_bet_prob` — **no EV and no Kelly**. `best_overall_bet` is the best pick
+across all eleven markets and carries `best_overall_odds`, `best_overall_prob`,
+`best_overall_ev` and `best_overall_kelly`. They correspond to the two ledger
+bases in that order.
+
+### `odds_coverage` says whether an odds event matched at all
+
+A boolean, and the honest way to ask "is this fixture priced". It is not the
+same as "every market has a price": with the default `ODDS_API_MARKETS=h2h` a
+fixture can have `odds_coverage: true`, real 1X2 odds, and null for all eight
+goals and BTTS markets.
+
+### A priced fixture can still produce no bet
+
+`kelly_*` is null when the edge failed to clear the minimum fractional Kelly —
+including on a market with a **positive** EV. A live fixture carried
+`ev_away: 0.0617` with `kelly_away: null` and `best_overall_bet: null`. So there
+are three distinct "no bet" states, and they mean different things:
+
+| State | Meaning |
+|---|---|
+| `odds_coverage: false` | No odds event matched; nothing to bet into |
+| priced, `ev <= 0` | A price exists and the model sees no edge |
+| priced, `ev > 0`, `kelly` null | There is an edge, but too small to be worth the variance |
+
+### `explanation` is a feature attribution, not prose
+
+An object with `units` (a sentence describing what the numbers mean) and `home`
+and `away` arrays of per-feature contributions:
+
+```json
+{
+  "units": "Contributions are additive in log goal-rate and multiplicative on goals: ...",
+  "home": [
+    { "feature": "elo_diff", "feature_value": 259.05, "contribution": 0.2871, "multiplier": 1.3326 },
+    { "feature": "other",    "feature_value": null,   "contribution": 0.0701, "multiplier": 1.0727 }
+  ],
+  "away": [ ... ]
+}
+```
+
+`contribution` is additive in log goal-rate; `multiplier` is `e^contribution`.
+The `other` row aggregates the remainder and has a null `feature_value`.
+Features seen in production include `elo_diff`, `home_elo`, `away_elo`,
+`home_rest_days`, `away_rest_days`, `home_venue_scored_10`,
+`home_venue_conceded_10`, `h2h_matches` and `away_matches_played`. Treat the
+list as open — it comes from the model, not from a fixed enum.
+
+### `correct_scores` is a top-10 scoreline distribution
+
+```json
+[{ "home": 2, "away": 0, "probability": 0.1211 }, { "home": 1, "away": 0, "probability": 0.0972 }]
+```
+
+Ten entries, descending by probability, summing to well under 1 — the tail is
+not included.
+
+### Fields worth understanding before you render anything
 
 **`date_confirmed`** — `false` means the date is a **matchday placeholder**, not
 a real kickoff. Upstream, roughly 88% of the fixture list sits on one. Render
@@ -139,6 +242,10 @@ back to a prior. The number is still well formed, but it is a much weaker claim.
 `elo-poisson` is the measurably weaker fallback (+0.0064 log-loss), and appears
 for fixtures that missed the last precompute run. Worth surfacing.
 
+**`actual_result`** — null until the fixture settles, and its value set is
+**not published in the schema** (it is a bare `string | null`). Settle a pick
+from `home_score` and `away_score` instead; goals are unambiguous.
+
 **`home_crest_url` / `away_crest_url`** — currently **always null**. StatPitch
 supplies no crest, and the old country-flag URLs became meaningless once the
 domain moved from national teams to clubs. The fields exist so a crest source
@@ -146,9 +253,10 @@ can be added later without a schema change.
 
 ### Unpriced fixtures are normal
 
-When no odds event matched, or no API key is configured, every `odds_*`, `ev_*`,
-`kelly_*` and pick field is null while the prediction stays fully populated.
-Show the prediction, hide the betting UI. It is not an error.
+When no odds event matched, or no API key is configured, `odds_coverage` is
+`false` and every price, EV, Kelly and pick field is null while the prediction
+stays fully populated. Show the prediction, hide the betting UI. It is not an
+error, and it is the common case for the seven unpriced competitions.
 
 ---
 
@@ -197,7 +305,8 @@ cannot tell a sound bet from a lottery ticket, since a 5% shot at 25.0 carries
 | `limit` | int 1-100 | `10` |
 
 Newest first. Sets `X-Total-Count`. An unknown `basis` is a 422, not an empty
-list — it is a typo, not a query with no results.
+list — it is a typo, not a query with no results. The same is true of an unknown
+`day` on `/fixtures`, which is a three-value enum.
 
 ```json
 {
@@ -278,7 +387,8 @@ actually beats plain 1X2. Averaging them would answer neither question.
   `match_date`, not settlement time, so a late-recorded result still lands in
   the week it was played.
 - **ROI is flat-stake.** One unit per bet, so `roi_pct` reads as return per unit
-  staked. `kelly_fraction` is stored on every row, so a stake-weighted variant
+  staked. Note that `roi_pct` and `hit_rate_pct` are the only rates in this API
+  already on a 0–100 scale — everything on a fixture is a 0–1 fraction. `kelly_fraction` is stored on every row, so a stake-weighted variant
   can be derived later without rewriting settled history.
 - **`roi_pct` and `hit_rate_pct` are `null`, not `0.0`, when nothing settled.**
   An empty window has no ROI, and rendering it as break-even would claim a
@@ -360,6 +470,19 @@ have less to serve.
 | `ODDS_API_REGION` | `eu` | |
 | `ODDS_API_MARKETS` | `h2h` | See quota below |
 | `ODDS_API_BOOKMAKERS` | all | Comma-separated to restrict |
+| `CORS_ORIGINS` | localhost `5173`–`5175`, localhost `8000`, `gabrielmayorga.dev`, `www.gabrielmayorga.dev` | Comma-separated or a JSON list |
+
+### CORS
+
+Browser clients must call from an allow-listed origin. `X-Total-Count` is in
+`expose_headers`, so `fetch`/`axios` can read it cross-origin — without that it
+would be invisible to JavaScript and pagination would read `undefined`.
+
+A missing `Access-Control-Allow-Origin` almost always means the caller's origin
+is not on the list, not that CORS is off. Vite falls back to `5174` when `5173`
+is taken, which is the usual cause locally. Note that `curl` returns no
+`Access-Control-Allow-Origin` unless you pass `-H "Origin: ..."` — that is
+correct behaviour and not evidence of a fault.
 
 ### Quota
 
@@ -409,7 +532,7 @@ club's odds to a prediction and corrupt the ledger permanently.
 | `200` | Success, including an empty day |
 | `401` / `403` | Missing or wrong `X-API-KEY` on the sync |
 | `404` | `/fixtures/{id}` or `/fixtures/today/best` with nothing to return |
-| `422` | Unknown `basis` on the ledger |
+| `422` | Unknown `basis` on the ledger, or an unknown `day` on `/fixtures` — a typo, not a query with no results |
 | `502` | StatPitch unreachable, or refused with a reason code |
 | `503` | The Odds API key is missing, or its quota is exhausted |
 
