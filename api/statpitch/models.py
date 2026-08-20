@@ -545,5 +545,9 @@ class SyncResultRead(SQLModel):
     settled: int
     ledgered: int
     pruned: int
+    # Clubs in the registry after this run, and how many fixture sides still
+    # render without a crest.
+    clubs: int = 0
+    missing_crests: int = 0
     model_version: str | None
     warnings: list[str] = []
