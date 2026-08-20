@@ -92,6 +92,25 @@ class Settings(BaseSettings):
     # Days kept either side of today, so 1 means yesterday/today/tomorrow.
     statpitch_retention_days: int = 1
 
+    # ── StatPitch customer accounts ───────────────────────────────────────────
+    # Separate cookies from the admin's, so the two sessions can never be
+    # mistaken for one another. `session_cookie_secure` and
+    # `session_cookie_samesite` above are shared deliberately: those describe the
+    # deployment, not the audience, and a second copy would only drift.
+    statpitch_session_cookie_name: str = "statpitch_session"
+    statpitch_csrf_cookie_name: str = "statpitch_csrf"
+    # Long, unlike the admin's 12 hours. A customer checks the app on match day;
+    # forcing a re-login every afternoon is how a subscription gets cancelled.
+    # The tier check happens per request against the database, so a long session
+    # never means a stale entitlement.
+    statpitch_session_max_age_seconds: int = 60 * 60 * 24 * 30
+    statpitch_session_idle_seconds: int = 60 * 60 * 24 * 7
+
+    # Counted separately from the admin's, so a customer being brute-forced
+    # cannot lock Gabriel out of the dashboard.
+    statpitch_login_max_attempts: int = 5
+    statpitch_login_attempt_window_seconds: int = 60 * 15
+
     odds_api_key: str = ""
     odds_api_region: str = "eu"
     # One request per market per league per run, against a 500/month free tier.

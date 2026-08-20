@@ -25,6 +25,7 @@ from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 import api.core.audit  # noqa: F401,E402  registers tables on the metadata
 import api.core.auth.models  # noqa: F401,E402  registers tables on the metadata
 import api.portfolio.models  # noqa: F401,E402  registers tables on the metadata
+import api.statpitch.accounts  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.models  # noqa: F401,E402  registers tables on the metadata
 from api.core.config import settings  # noqa: E402
 from api.core.database import get_session  # noqa: E402
