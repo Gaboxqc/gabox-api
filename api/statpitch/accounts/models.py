@@ -23,9 +23,11 @@ timezone-aware datetime, so a tz-aware column comes back naive and every
 `aware < naive` comparison raises TypeError.
 """
 
+import re
 from datetime import UTC, datetime
 from typing import Literal
 
+from pydantic import field_validator
 from sqlmodel import Field, Relationship, SQLModel
 
 # What a customer has paid for. Ordered weakest to strongest — `TIER_ORDER` is
@@ -160,3 +162,91 @@ class StatPitchLoginAttempt(SQLModel, table=True):
     ip_address: str = Field(index=True, max_length=45)
     succeeded: bool = Field(default=False)
     attempted_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+# ==============================================================================
+# REQUEST AND READ SCHEMAS  (not tables)
+# ==============================================================================
+
+# Deliberately not `pydantic.EmailStr`: that pulls in email-validator and
+# dnspython, which is a megabyte of serverless bundle to answer a question this
+# cannot really answer anyway. Whether an address exists is settled by sending
+# mail to it, not by parsing — so this only rejects input that is obviously not
+# an address, and verification is left to the verification email.
+_EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
+
+
+def describe_email_problem(email: str) -> str | None:
+    """Return why `email` is unusable, or None if it looks like an address."""
+    if len(email) > 254:
+        return "Email address is too long."
+    if not _EMAIL_SHAPE.match(email):
+        return "That does not look like an email address."
+    return None
+
+
+class _EmailPayload(SQLModel):
+    """Shared normalisation, so no route can forget to lowercase an address.
+
+    The unique index is what ultimately enforces one-account-per-address; this
+    makes sure the value reaching it has already been folded.
+    """
+
+    email: str = Field(min_length=3, max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def _normalise(cls, value: str) -> str:
+        folded = value.strip().lower()
+        problem = describe_email_problem(folded)
+        if problem:
+            raise ValueError(problem)
+        return folded
+
+
+class RegisterRequest(_EmailPayload):
+    password: str = Field(min_length=1, max_length=256)
+
+
+class LoginRequest(_EmailPayload):
+    password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordChangeRequest(SQLModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class AccountRead(SQLModel):
+    """What the account routes return. Never the password hash.
+
+    `tier` is the *effective* tier, so a lapsed subscription reports `free` here
+    and the frontend needs no expiry arithmetic of its own. `tier_expires_at` is
+    still included, because "Pro until 3 March" is worth showing.
+
+    `csrf_token` travels in the body rather than being read from the cookie: the
+    cookie is host-only to the API, and if the frontend is served from a
+    different subdomain then `document.cookie` there cannot see it. Returning it
+    is safe because CORS stops a non-allowlisted origin from reading any
+    response body.
+    """
+
+    email: str
+    tier: Tier
+    tier_expires_at: datetime | None = None
+    trial_used: bool = False
+    email_verified: bool = False
+    last_login_at: datetime | None = None
+    csrf_token: str
+
+    @classmethod
+    def of(cls, account: StatPitchAccount, csrf_token: str) -> "AccountRead":
+        return cls(
+            email=account.email,
+            tier=account.effective_tier,
+            tier_expires_at=account.tier_expires_at,
+            trial_used=account.trial_used_at is not None,
+            email_verified=account.email_verified_at is not None,
+            last_login_at=account.last_login_at,
+            csrf_token=csrf_token,
+        )
