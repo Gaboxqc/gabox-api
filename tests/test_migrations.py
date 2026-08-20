@@ -24,6 +24,7 @@ import api.core.auth.models  # noqa: F401
 import api.portfolio.models  # noqa: F401
 import api.statpitch.accounts  # noqa: F401
 import api.statpitch.models  # noqa: F401
+import api.statpitch.teams  # noqa: F401
 from alembic import command
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

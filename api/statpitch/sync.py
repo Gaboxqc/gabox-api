@@ -35,6 +35,7 @@ from api.statpitch.odds_service import OddsEvent, OddsUnavailable, fetch_odds
 from api.statpitch.pricing import apply_pricing
 from api.statpitch.scores_service import fetch_scores
 from api.statpitch.settlement import apply_scores, bank_ledger, prune_fixtures
+from api.statpitch.teams import link_fixtures
 
 log = logging.getLogger("statpitch.sync")
 
@@ -49,6 +50,10 @@ class SyncReport:
     settled: int = 0
     ledgered: int = 0
     pruned: int = 0
+    clubs: int = 0
+    # Sides rendering without a crest. Non-fatal — the UI falls back to a
+    # monogram — but a jump here means the registry needs a backfill run.
+    missing_crests: int = 0
     model_version: str | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -142,6 +147,8 @@ _REFRESHABLE = (
     "away_team",
     "neutral_venue",
     "odds_coverage",
+    "home_crest_url",
+    "away_crest_url",
     "prediction_source",
     "model_version",
     "config_version",
@@ -304,6 +311,16 @@ async def run_sync(session: Session) -> SyncReport:
 
     for row in rows:
         apply_pricing(row)
+
+    # ── 2b. Clubs and crests ─────────────────────────────────────────────────
+    # Before the upsert, so a fixture is stored with its crest already attached
+    # rather than gaining one a sync later.
+    report.clubs, report.missing_crests = link_fixtures(session, rows)
+    if report.missing_crests:
+        report.warnings.append(
+            f"{report.missing_crests} fixture side(s) have no crest; "
+            "run scripts/backfill_crests.py to fill the registry."
+        )
 
     report.stored = _upsert(session, rows)
 

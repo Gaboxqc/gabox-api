@@ -97,6 +97,8 @@ async def sync(db: SessionDep):
         settled=report.settled,
         ledgered=report.ledgered,
         pruned=report.pruned,
+        clubs=report.clubs,
+        missing_crests=report.missing_crests,
         model_version=report.model_version,
         warnings=report.warnings,
     )
