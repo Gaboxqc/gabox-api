@@ -19,6 +19,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Only the crest backfill needs these, and only when run by hand or in CI.
+# Deliberately out of the main dependency list: botocore alone would add tens of
+# megabytes to a serverless bundle that never talks to R2 at request time.
+crests = [
+    "boto3>=1.35.0",
+    "pillow>=11.0.0",
+]
 dev = [
     "black>=26.5.1",
     "ruff>=0.15.0",

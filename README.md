@@ -217,6 +217,43 @@ methods, taken from the `csrf_token` in any account response body.
   IP. Without that, an endpoint that runs an argon2 hash per request is a cheap
   way to burn the function's CPU budget.
 
+### Club crests
+
+Clubs live in `statpitch_team`, which is permanent — unlike the fixtures, which
+are pruned every three days. The sync registers every club it sees; filling in
+the crest is a separate job:
+
+```bash
+python -m scripts.backfill_crests --dry-run
+```
+
+```bash
+python -m scripts.backfill_crests
+```
+
+Needs the optional extra (`pip install -e ".[crests]"`) and R2 credentials.
+
+- **Source is ESPN's public team list** — no key, and it carries a dark-background
+  badge variant, which matters on a near-black UI. Measured coverage: all 96
+  clubs across the five priced leagues and both UEFA competitions, none missing a
+  badge. The cups have gaps, all amateur and lower-division sides.
+- **The bytes are copied into R2, not hotlinked.** ESPN's endpoint is
+  undocumented, so this stays a *seeding-time* dependency: if it changes shape
+  tomorrow, every crest already fetched keeps serving. Hotlinking would put a
+  third party's config change in front of paying users.
+- **Keys contain a hash of the image**, written `immutable` with a one-year TTL.
+  A changed crest is a new key plus a column update — no purge to forget, no
+  window serving something stale, and rollback is a column update too. Re-running
+  the backfill on unchanged images uploads nothing.
+- **Images are normalised to square WebP at 128 and 64px.** A real crest goes
+  from 43 KB PNG to 8.5 KB. Re-encoding is also the sanitiser: whatever arrives is
+  decoded to pixels and written back out.
+- **An unresolved crest is a normal outcome.** Matching one club name has no
+  opponent to break ties, so a winner must also clear the runner-up by a margin —
+  "RCD Espanyol de Barcelona" scores 0.90 against both Espanyol *and* Barcelona,
+  and is left alone rather than given the wrong badge. The report names exactly
+  what needs a manual alias.
+
 ---
 
 ## How StatPitch works

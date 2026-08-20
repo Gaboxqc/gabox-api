@@ -111,6 +111,18 @@ class Settings(BaseSettings):
     statpitch_login_max_attempts: int = 5
     statpitch_login_attempt_window_seconds: int = 60 * 15
 
+    # ── Cloudflare R2, for club crests ────────────────────────────────────────
+    # Only the backfill script and its tooling read these; nothing in the
+    # request path talks to R2. Crests are served to the browser straight from
+    # the CDN, so the API never needs credentials at runtime.
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket: str = "gabox-media"
+    # The custom domain in front of the bucket. Never the R2 S3 endpoint: that
+    # one stays credentialed and private.
+    r2_public_base_url: str = "https://cdn.gabrielmayorga.dev"
+
     odds_api_key: str = ""
     odds_api_region: str = "eu"
     # One request per market per league per run, against a 500/month free tier.
