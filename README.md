@@ -184,6 +184,39 @@ Collection endpoints return `[]` rather than 404 on an empty day — roughly 88%
 fixtures upstream sit on a matchday placeholder, so a real matchday can
 legitimately show nothing under today's date.
 
+### StatPitch accounts
+
+Customer accounts for the paid tiers. Entirely separate from the admin login
+above: different tables, different cookies, and no route here can grant
+administrative access.
+
+| Method | Endpoint | Notes |
+|---|---|---|
+| `POST` | `/statpitch/accounts/register` | Email + password. Signs you in on the free tier |
+| `POST` | `/statpitch/accounts/login` | |
+| `POST` | `/statpitch/accounts/logout` | 🔑 Revokes the current session |
+| `GET` | `/statpitch/accounts/me` | Email, effective tier, expiry. The frontend's source of truth |
+| `POST` | `/statpitch/accounts/password` | 🔑 Closes every other session and hands back a fresh one |
+| `POST` | `/statpitch/accounts/sessions/revoke-all` | 🔑 Sign out everywhere, here included |
+| `POST` | `/statpitch/accounts/trial` | 🔑 Starts the 14-day Pro trial. Once per account, ever |
+
+🔑 needs a customer session cookie plus the `X-CSRF-Token` header on unsafe
+methods, taken from the `csrf_token` in any account response body.
+
+- **`tier` is always the *effective* tier.** A lapsed subscription reports `free`
+  the moment it expires, with no scheduled job demoting anyone and nobody being
+  logged out. The frontend never does expiry arithmetic of its own.
+- **Sessions last 30 days, idle out after 7.** Much longer than the admin's 12
+  hours, because someone checking predictions on match day should not be made to
+  sign in again. Safe because the tier is re-read from the database on every
+  request, so a long session never means a stale entitlement.
+- **The trial needs no payment provider** — it is Pro with an end date.
+  `trial_used_at` is never cleared, so a second trial has to be a deliberate
+  manual grant rather than a side effect of cancelling.
+- **Registration is throttled on the same counter as login**, per address and per
+  IP. Without that, an endpoint that runs an argon2 hash per request is a cheap
+  way to burn the function's CPU budget.
+
 ---
 
 ## How StatPitch works
