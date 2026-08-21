@@ -245,6 +245,35 @@ curl -H "Authorization: Bearer sp_live_..." https://api.gabrielmayorga.dev/statp
 - `last_used_at` is written at most once a day — enough to answer "can I revoke
   this?" without a database write in front of every read.
 
+### Administration
+
+Customer accounts are managed at `/statpitch/admin/*`, behind the **existing**
+admin guard — your dashboard session or the master key, the same one that
+protects the portfolio. A StatPitch customer never reaches these, whatever tier
+they hold.
+
+| Method | Endpoint | Notes |
+|---|---|---|
+| `GET` | `/statpitch/admin/accounts` | Paginated. `?tier=` `?email=` `?is_active=` · `X-Total-Count` |
+| `GET` | `/statpitch/admin/accounts/{id}` | Plus live session and API-key counts |
+| `POST` | `/statpitch/admin/accounts` | Creates one and returns a one-time password |
+| `PATCH` | `/statpitch/admin/accounts/{id}` | `{is_active}` — deactivate or restore |
+| `DELETE` | `/statpitch/admin/accounts/{id}` | Irreversible; cascades sessions, keys, unlocks |
+
+- **Both tiers are reported.** `tier` is what was granted, `effective_tier` is
+  what the account has today. A lapsed Elite showing only `free` would look like
+  somebody had downgraded it, which is the opposite of what an admin about to
+  extend it needs to know.
+- **Creation generates the password.** There is no password field on the
+  request: an admin typing somebody else's password puts a plaintext credential
+  through a form, a body and a log. It is returned once and never again.
+- **Deactivating closes every live session**, not just future logins — otherwise
+  a disabled account keeps reading for up to thirty days, since a session is
+  only checked against `is_active` when it is loaded.
+- **Prefer deactivating to deleting.** It stops access just as immediately, is
+  reversible, and keeps the history a support conversation usually needs.
+- Writes are recorded by the existing audit middleware.
+
 ### Tiers
 
 What a caller sees is decided in one place, [api/statpitch/tiers.py](api/statpitch/tiers.py).
