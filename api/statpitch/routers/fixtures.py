@@ -11,15 +11,15 @@ from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
 from api.core.database import SessionDep
 from api.core.deps import PageDep
 from api.core.security import validate_api_key
+from api.statpitch.accounts.deps import CallerTier
 from api.statpitch.client import StatPitchError, StatPitchRefusal
 from api.statpitch.clock import current_window
 from api.statpitch.models import (
-    FixtureRead,
     SettledBetRead,
     StatPitchFixture,
     StatPitchSettledBet,
@@ -28,8 +28,21 @@ from api.statpitch.models import (
     ThreeDayWindow,
 )
 from api.statpitch.odds_service import OddsUnavailable
+from api.statpitch.serialization import (
+    FixtureFreeRead,
+    FixtureFullRead,
+    serialize_fixture,
+    serialize_fixtures,
+)
 from api.statpitch.stats import BASES, build_stats
 from api.statpitch.sync import run_sync
+from api.statpitch.tiers import Feature, allows, visible_competitions
+
+# Both shapes, so OpenAPI documents what each tier actually receives. Declaring
+# only the free model would be worse than undocumented: FastAPI filters the
+# response *down* to the declared model, silently truncating every paid caller
+# to the free shape.
+FixtureResponse = FixtureFullRead | FixtureFreeRead
 
 log = logging.getLogger("statpitch.routes")
 
@@ -43,11 +56,35 @@ def _window_dates() -> ThreeDayWindow:
     return ThreeDayWindow(yesterday=window.yesterday, today=window.today, tomorrow=window.tomorrow)
 
 
-def _fixtures_on(db: SessionDep, day: date) -> list[StatPitchFixture]:
+def _scoped(query, tier: str):
+    """Restrict a fixture query to the competitions this tier may see.
+
+    Applied in SQL rather than filtered afterwards, so a free caller's
+    `X-Total-Count` matches what they actually received. Counting rows somebody
+    cannot see and then withholding them makes pagination lie.
+    """
+    return query.where(col(StatPitchFixture.competition_id).in_(visible_competitions(tier)))
+
+
+def _require(feature: Feature, tier: str) -> None:
+    """Guard a whole endpoint.
+
+    Used only where a reduced version would be meaningless: there is no partial
+    track record worth returning. Depth elsewhere is a response shape, not an
+    error — see `serialization`.
+    """
+    if not allows(tier, feature):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="This is a Pro feature. Upgrade to see it.",
+        )
+
+
+def _fixtures_on(db: SessionDep, day: date, tier: str) -> list[StatPitchFixture]:
     return db.exec(
-        select(StatPitchFixture)
-        .where(StatPitchFixture.match_date == day)
-        .order_by(StatPitchFixture.commence_time, StatPitchFixture.id)
+        _scoped(select(StatPitchFixture).where(StatPitchFixture.match_date == day), tier).order_by(
+            StatPitchFixture.commence_time, StatPitchFixture.id
+        )
     ).all()
 
 
@@ -111,20 +148,24 @@ async def sync(db: SessionDep):
 
 @router.get(
     "/fixtures",
-    response_model=list[FixtureRead],
+    response_model=list[FixtureResponse],
     summary="Every cached fixture — yesterday, today and tomorrow",
 )
 async def list_fixtures(
     db: SessionDep,
     response: Response,
+    tier: CallerTier,
     day: Annotated[DayName | None, Query(description="Restrict to one of the three days")] = None,
     competition_id: Annotated[str | None, Query()] = None,
     value_bets_only: Annotated[bool, Query(description="Only fixtures with a Kelly pick")] = False,
 ):
     window = _window_dates()
-    query = select(StatPitchFixture).where(
-        StatPitchFixture.match_date >= window.yesterday,
-        StatPitchFixture.match_date <= window.tomorrow,
+    query = _scoped(
+        select(StatPitchFixture).where(
+            StatPitchFixture.match_date >= window.yesterday,
+            StatPitchFixture.match_date <= window.tomorrow,
+        ),
+        tier,
     )
 
     if day is not None:
@@ -137,13 +178,14 @@ async def list_fixtures(
     total = db.exec(select(func.count()).select_from(query.subquery())).one()
     response.headers["X-Total-Count"] = str(int(total))
 
-    return db.exec(
+    rows = db.exec(
         query.order_by(
             StatPitchFixture.match_date,
             StatPitchFixture.commence_time,
             StatPitchFixture.id,
         )
     ).all()
+    return serialize_fixtures(rows, tier)
 
 
 @router.get(
@@ -162,53 +204,56 @@ async def get_window():
 
 @router.get(
     "/fixtures/today",
-    response_model=list[FixtureRead],
+    response_model=list[FixtureResponse],
     summary="Today's fixtures, in local time",
 )
-async def fixtures_today(db: SessionDep):
-    return _fixtures_on(db, current_window().today)
+async def fixtures_today(db: SessionDep, tier: CallerTier):
+    return serialize_fixtures(_fixtures_on(db, current_window().today, tier), tier)
 
 
 @router.get(
     "/fixtures/yesterday",
-    response_model=list[FixtureRead],
+    response_model=list[FixtureResponse],
     summary="Yesterday's fixtures, with results where they have settled",
 )
-async def fixtures_yesterday(db: SessionDep):
-    return _fixtures_on(db, current_window().yesterday)
+async def fixtures_yesterday(db: SessionDep, tier: CallerTier):
+    return serialize_fixtures(_fixtures_on(db, current_window().yesterday, tier), tier)
 
 
 @router.get(
     "/fixtures/tomorrow",
-    response_model=list[FixtureRead],
+    response_model=list[FixtureResponse],
     summary="Tomorrow's fixtures",
 )
-async def fixtures_tomorrow(db: SessionDep):
-    return _fixtures_on(db, current_window().tomorrow)
+async def fixtures_tomorrow(db: SessionDep, tier: CallerTier):
+    return serialize_fixtures(_fixtures_on(db, current_window().tomorrow, tier), tier)
 
 
 @router.get(
     "/fixtures/today/best",
-    response_model=FixtureRead,
+    response_model=FixtureResponse,
     summary="Today's most confident fixture",
     description=(
         "Highest home-or-away win probability. This is the model's clearest "
         "call, which is not the same as its best bet — see /fixtures/today/value-bets."
     ),
 )
-async def best_today(db: SessionDep):
-    fixtures = _fixtures_on(db, current_window().today)
+async def best_today(db: SessionDep, tier: CallerTier):
+    """Every tier gets this — "Match of the Day pick" is on the free column of
+    the pricing page. Free sees the pick at free depth."""
+    fixtures = _fixtures_on(db, current_window().today, tier)
     if not fixtures:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No fixtures cached for today.",
         )
-    return max(fixtures, key=lambda f: max(f.home_win_prob, f.away_win_prob))
+    best = max(fixtures, key=lambda f: max(f.home_win_prob, f.away_win_prob))
+    return serialize_fixture(best, tier)
 
 
 @router.get(
     "/fixtures/today/value-bets",
-    response_model=list[FixtureRead],
+    response_model=list[FixtureResponse],
     summary="Today's positive-edge picks, strongest Kelly first",
     description=(
         "Only fixtures whose best selection clears the minimum fractional Kelly. "
@@ -216,7 +261,11 @@ async def best_today(db: SessionDep):
         "picks that look attractive and are not worth the variance."
     ),
 )
-async def value_bets_today(db: SessionDep):
+async def value_bets_today(db: SessionDep, tier: CallerTier):
+    """Pro and above. This endpoint *is* the edge indicator, so a free version
+    would either be empty or give away the thing being sold."""
+    _require(Feature.EDGE_INDICATORS, tier)
+
     fixtures = db.exec(
         select(StatPitchFixture)
         .where(
@@ -225,22 +274,25 @@ async def value_bets_today(db: SessionDep):
         )
         .order_by(StatPitchFixture.best_overall_kelly.desc())
     ).all()
-    return fixtures
+    return serialize_fixtures(fixtures, tier)
 
 
 @router.get(
     "/fixtures/{fixture_pk}",
-    response_model=FixtureRead,
+    response_model=FixtureResponse,
     summary="One cached fixture by primary key",
 )
-async def get_fixture(fixture_pk: int, db: SessionDep):
+async def get_fixture(fixture_pk: int, db: SessionDep, tier: CallerTier):
     fixture = db.get(StatPitchFixture, fixture_pk)
-    if fixture is None:
+    # A competition this tier cannot see is reported as absent rather than as
+    # forbidden. 403 would confirm the fixture exists, and which fixtures exist
+    # in the other seven competitions is part of what Pro is buying.
+    if fixture is None or fixture.competition_id not in visible_competitions(tier):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Fixture {fixture_pk} is not in the three-day cache.",
         )
-    return fixture
+    return serialize_fixture(fixture, tier)
 
 
 # ==============================================================================
@@ -260,7 +312,8 @@ async def get_fixture(fixture_pk: int, db: SessionDep):
         "measured."
     ),
 )
-async def get_stats(db: SessionDep):
+async def get_stats(db: SessionDep, tier: CallerTier):
+    _require(Feature.LEDGER_ROI, tier)
     return build_stats(db)
 
 
@@ -273,9 +326,12 @@ async def get_ledger(
     db: SessionDep,
     response: Response,
     page: PageDep,
+    tier: CallerTier,
     basis: Annotated[str | None, Query(description="1x2 or overall")] = None,
     competition_id: Annotated[str | None, Query()] = None,
 ):
+    _require(Feature.LEDGER_ROI, tier)
+
     if basis is not None and basis not in BASES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

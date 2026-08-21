@@ -114,7 +114,7 @@ class TestTodayHighlights:
     def test_best_returns_404_when_nothing_is_cached(self, client):
         assert client.get("/statpitch/fixtures/today/best").status_code == 404
 
-    def test_value_bets_are_ranked_by_kelly(self, client, make_fixture, seed_fixtures):
+    def test_value_bets_are_ranked_by_kelly(self, client, auth, make_fixture, seed_fixtures):
         seed_fixtures(
             make_fixture(
                 best_overall_bet="home_win", best_overall_kelly=0.03, home_team="Smaller edge"
@@ -125,7 +125,7 @@ class TestTodayHighlights:
             make_fixture(best_overall_bet=None, home_team="No edge"),
         )
 
-        body = client.get("/statpitch/fixtures/today/value-bets").json()
+        body = client.get("/statpitch/fixtures/today/value-bets", headers=auth).json()
         assert [f["home_team"] for f in body] == ["Bigger edge", "Smaller edge"]
 
 
@@ -140,8 +140,11 @@ class TestFixtureDetail:
 
 
 class TestStats:
-    def test_reports_the_window_and_both_series(self, client):
-        body = client.get("/statpitch/stats").json()
+    """ROI is a Pro line on the pricing page, so these carry the master key —
+    which reads as Elite. `tests/test_statpitch_tiers.py` covers the refusals."""
+
+    def test_reports_the_window_and_both_series(self, client, auth):
+        body = client.get("/statpitch/stats", headers=auth).json()
 
         assert body["timezone"] == "America/Managua"
         assert body["generated_for"] == today_local().isoformat()
@@ -149,7 +152,7 @@ class TestStats:
         # Nothing settled, so no ROI can be claimed.
         assert all(entry["week"]["roi_pct"] is None for entry in body["roi"])
 
-    def test_counts_today(self, client, make_fixture, seed_fixtures):
+    def test_counts_today(self, client, auth, make_fixture, seed_fixtures):
         seed_fixtures(
             make_fixture(home_win_prob=0.80, draw_prob=0.12, away_win_prob=0.08),
             make_fixture(best_overall_bet="home_win", best_overall_kelly=0.05),
@@ -159,7 +162,7 @@ class TestStats:
             ),
         )
 
-        body = client.get("/statpitch/stats").json()
+        body = client.get("/statpitch/stats", headers=auth).json()
         assert body["fixtures_today"] == 2
         assert body["fixtures_tomorrow"] == 1
         assert body["high_confidence_today"] == 1
@@ -167,14 +170,14 @@ class TestStats:
 
 
 class TestLedger:
-    def test_starts_empty(self, client):
-        response = client.get("/statpitch/ledger")
+    def test_starts_empty(self, client, auth):
+        response = client.get("/statpitch/ledger", headers=auth)
         assert response.status_code == 200
         assert response.json() == []
         assert response.headers["X-Total-Count"] == "0"
 
-    def test_rejects_an_unknown_basis(self, client):
-        response = client.get("/statpitch/ledger", params={"basis": "parlay"})
+    def test_rejects_an_unknown_basis(self, client, auth):
+        response = client.get("/statpitch/ledger", params={"basis": "parlay"}, headers=auth)
         assert response.status_code == 422
         assert "1x2" in response.json()["detail"]
 
