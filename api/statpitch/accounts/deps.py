@@ -9,15 +9,20 @@ raising, and the caller resolves that to the free tier.
 `require_account` is for the routes that are meaningless without a person behind
 them: "who am I", "log me out", "change my password".
 
-Neither of these can authenticate an admin, and the master key is deliberately
-not accepted: a machine key has no tier, and quietly treating it as Elite would
-make the entitlement rules untestable from the outside.
+Neither can authenticate an admin, and neither accepts the master key: a machine
+key is nobody, so `/accounts/me` refuses it.
+
+`current_tier` is the exception, and the distinction is deliberate. Identity and
+entitlement are different questions — the master key has no account but does
+have full entitlement, because it is the owner's key and the admin dashboard
+carries it.
 """
 
 import secrets
 from typing import Annotated
 
-from fastapi import Cookie, Depends, Header, HTTPException, Request, status
+from fastapi import Cookie, Depends, Header, HTTPException, Request, Security, status
+from fastapi.security import APIKeyHeader
 
 from api.core.config import settings
 from api.core.database import SessionDep
@@ -25,6 +30,10 @@ from api.statpitch.accounts.models import StatPitchAccount, StatPitchAccountSess
 from api.statpitch.accounts.sessions import load_valid_session, touch_session
 
 CSRF_HEADER_NAME = "X-CSRF-Token"
+
+# auto_error=False so a missing key is simply an anonymous caller rather
+# than a 403 — these routes are readable without any credential at all.
+_api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
 
 # Methods that cannot change state, so they need no CSRF token.
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -129,7 +138,7 @@ async def require_account(
 
 
 def tier_of(account: StatPitchAccount | None) -> Tier:
-    """Resolve a caller to a tier. Anonymous reads as free.
+    """Resolve a signed-in account to a tier. Anonymous reads as free.
 
     The single place that answers "what may this caller see", so that no route
     has to remember that `None` means free rather than means blocked.
@@ -137,6 +146,29 @@ def tier_of(account: StatPitchAccount | None) -> Tier:
     return account.effective_tier if account is not None else "free"
 
 
+async def current_tier(
+    account: Annotated[StatPitchAccount | None, Depends(optional_account)],
+    api_key: Annotated[str | None, Security(_api_key_header)] = None,
+) -> Tier:
+    """What the caller may see, master key included.
+
+    The master key has no *account* — `/accounts/me` still refuses it, because
+    a machine key is nobody. But it does have full *entitlement*: it is the
+    owner's key, the admin dashboard carries it, and denying Gabriel his own
+    ledger because he is not a paying subscriber would be absurd.
+
+    Identity and entitlement are separate questions, and this is the one place
+    they are answered differently.
+    """
+    if api_key and secrets.compare_digest(
+        api_key.encode("utf-8"), settings.api_master_key.encode("utf-8")
+    ):
+        return "elite"
+    return tier_of(account)
+
+
 CurrentAccount = Annotated[StatPitchAccount | None, Depends(optional_account)]
 RequiredAccount = Annotated[StatPitchAccount, Depends(require_account)]
 AccountSessionDep = Annotated[StatPitchAccountSession, Depends(require_account_session)]
+# What read routes should depend on: the tier, not the account.
+CallerTier = Annotated[Tier, Depends(current_tier)]

@@ -217,6 +217,35 @@ methods, taken from the `csrf_token` in any account response body.
   IP. Without that, an endpoint that runs an argon2 hash per request is a cheap
   way to burn the function's CPU budget.
 
+### Tiers
+
+What a caller sees is decided in one place, [api/statpitch/tiers.py](api/statpitch/tiers.py).
+
+| | Free | Pro | Elite |
+|---|---|---|---|
+| Competitions | the 5 priced leagues | all 12 | all 12 |
+| 1X2 probabilities + Match of the Day | ✅ | ✅ | ✅ |
+| Market breakdown, edge & Kelly, confidence | — | ✅ | ✅ |
+| Settled ledger & ROI | — | ✅ | ✅ |
+| API access | — | — | ✅ |
+
+- **Depth is a response shape, not a 403.** Free callers get a smaller object
+  with `locked: true`, so the frontend can render an upsell where the numbers
+  would be. Gated fields are **absent, not null** — `null` is indistinguishable
+  from "no market offered" and would render as broken data.
+- **`/stats`, `/ledger` and `/fixtures/today/value-bets` return 402** below Pro.
+  Those are the exceptions: there is no partial track record worth returning.
+- **Elite adds API access and nothing else**, exactly as the pricing page says.
+  Pro and Elite receive byte-identical fixture payloads, and a test asserts it.
+- **Competition scope is applied in SQL**, so `X-Total-Count` matches what was
+  actually sent. A fixture outside a caller's scope is **404, not 403** — a 403
+  would confirm it exists, which is part of what Pro is buying.
+- **The master key reads as Elite.** It has no account (`/accounts/me` still
+  refuses it), but it is the owner's key and the dashboard carries it. Identity
+  and entitlement are separate questions.
+- **An unrecognised tier resolves to free**, so a typo in a manual grant fails
+  closed.
+
 ### Club crests
 
 Clubs live in `statpitch_team`, which is permanent — unlike the fixtures, which
