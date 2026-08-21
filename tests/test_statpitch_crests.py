@@ -348,3 +348,57 @@ def test_key_slugs_are_url_safe():
 def test_key_slugs_do_not_start_or_end_with_a_separator():
     assert not storage.key_slug("1. fc union").startswith("-")
     assert not storage.key_slug("schalke 04 ").endswith("-")
+
+
+def test_every_size_of_a_club_shares_one_name():
+    """Hashing each encoded variant gave every size an unrelated key, so the
+    small one was uploaded and then unreachable by anything holding the large
+    one's URL."""
+    source = b"the original png bytes"
+    large = storage.crest_key("arsenal", source, 512)
+    small = storage.crest_key("arsenal", source, 128)
+
+    assert large.replace("-512.webp", "-128.webp") == small
+
+
+def test_a_badge_that_fits_is_never_resampled():
+    """The whole reason 512 is worth storing: the source survives untouched."""
+    pytest.importorskip("PIL.Image")
+    import io
+
+    from PIL import Image
+
+    result = normalise_crest(_png(400, 400), 512)
+    with Image.open(io.BytesIO(result)) as decoded:
+        assert decoded.size == (512, 512)
+
+
+def test_art_that_fits_survives_pixel_for_pixel():
+    """The point of storing a native-size copy: no resampling, and a lossless
+    encode, so the badge that comes back *is* the badge that went in.
+
+    Asserted as an exact round-trip rather than as a byte count — file size
+    depends on the artwork, and a flat test image compresses unlike a real
+    crest.
+    """
+    Image = pytest.importorskip("PIL.Image")
+    import io
+
+    source = _png(400, 400)
+    with Image.open(io.BytesIO(source)) as original:
+        expected = original.convert("RGBA").crop(original.convert("RGBA").getbbox())
+
+    with Image.open(io.BytesIO(normalise_crest(source, 512))) as decoded:
+        centred = decoded.convert("RGBA").crop(decoded.convert("RGBA").getbbox())
+
+    assert centred.tobytes() == expected.tobytes()
+
+
+def test_art_that_must_shrink_is_resampled_instead():
+    """The other half of the rule: below the source size it is a lossy encode of
+    a downscale, because that is what a downscale costs."""
+    Image = pytest.importorskip("PIL.Image")
+    import io
+
+    with Image.open(io.BytesIO(normalise_crest(_png(400, 400), 128))) as decoded:
+        assert decoded.size == (128, 128)
