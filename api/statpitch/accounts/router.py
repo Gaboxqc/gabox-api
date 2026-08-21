@@ -20,8 +20,12 @@ from api.core.auth.passwords import (
 from api.core.config import settings
 from api.core.database import SessionDep
 from api.statpitch.accounts.deps import AccountSessionDep, RequiredAccount, client_ip
+from api.statpitch.accounts.keys import StatPitchApiKey, issue, list_for, revoke
 from api.statpitch.accounts.models import (
     AccountRead,
+    ApiKeyCreateRequest,
+    ApiKeyIssued,
+    ApiKeyRead,
     LoginRequest,
     PasswordChangeRequest,
     RegisterRequest,
@@ -37,6 +41,7 @@ from api.statpitch.accounts.sessions import (
     revoke_all_sessions,
     revoke_session,
 )
+from api.statpitch.tiers import Feature, allows
 
 log = logging.getLogger("statpitch.accounts")
 
@@ -352,3 +357,86 @@ async def start_trial(db: SessionDep, session: AccountSessionDep):
 
     log.info("StatPitch account %s started the Pro trial", account.id)
     return AccountRead.of(account, session.csrf_token)
+
+
+# ==============================================================================
+# API KEYS
+# ==============================================================================
+
+
+def _as_read(key: StatPitchApiKey) -> ApiKeyRead:
+    return ApiKeyRead(
+        id=key.id,
+        name=key.name,
+        prefix=key.prefix,
+        created_at=key.created_at,
+        last_used_at=key.last_used_at,
+        revoked=key.revoked_at is not None,
+    )
+
+
+def _require_api_access(account) -> None:
+    if not allows(account.effective_tier, Feature.API_ACCESS):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="API access is an Elite feature.",
+        )
+
+
+@router.post(
+    "/keys",
+    response_model=ApiKeyIssued,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="statpitch_create_api_key",
+    summary="Issue an API key (Elite)",
+)
+async def create_api_key(
+    payload: ApiKeyCreateRequest,
+    db: SessionDep,
+    session: AccountSessionDep,
+):
+    """The only response that ever contains the key itself.
+
+    Nothing stores the raw value, so a lost key is replaced rather than
+    recovered — which is exactly the property that makes storing only its hash
+    worth anything.
+    """
+    account = session.account
+    _require_api_access(account)
+
+    key, raw_key = issue(db, account.id, payload.name.strip())
+    return ApiKeyIssued(**_as_read(key).model_dump(), key=raw_key)
+
+
+@router.get(
+    "/keys",
+    response_model=list[ApiKeyRead],
+    operation_id="statpitch_list_api_keys",
+    summary="List this account's API keys",
+)
+async def list_api_keys(db: SessionDep, session: AccountSessionDep):
+    """Revoked keys are listed too. A key that turns up in a log later is worth
+    being able to identify, which deleting the row would prevent."""
+    return [_as_read(key) for key in list_for(db, session.account_id)]
+
+
+@router.delete(
+    "/keys/{key_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="statpitch_revoke_api_key",
+    summary="Revoke an API key",
+)
+async def revoke_api_key(key_id: int, db: SessionDep, session: AccountSessionDep):
+    key = db.get(StatPitchApiKey, key_id)
+    # Somebody else's key is reported as absent, not as forbidden: 404 does not
+    # confirm that the id exists.
+    if key is None or key.account_id != session.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No such API key.",
+        )
+
+    # Revoking is not gated on the tier. An account that lapses from Elite must
+    # still be able to turn off keys it issued while it had them.
+    if key.revoked_at is None:
+        revoke(db, key)

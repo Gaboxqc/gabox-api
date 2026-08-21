@@ -250,3 +250,29 @@ class AccountRead(SQLModel):
             last_login_at=account.last_login_at,
             csrf_token=csrf_token,
         )
+
+
+class ApiKeyCreateRequest(SQLModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+class ApiKeyRead(SQLModel):
+    """An issued key as its owner sees it afterwards — never the key itself."""
+
+    id: int
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    revoked: bool = False
+
+
+class ApiKeyIssued(ApiKeyRead):
+    """The one response that carries the secret.
+
+    Returned exactly once, at creation. Nothing stores the raw key, so a lost
+    one is replaced rather than recovered — which is the property that makes the
+    stored hash worth anything.
+    """
+
+    key: str

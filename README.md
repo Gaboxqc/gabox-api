@@ -199,6 +199,9 @@ administrative access.
 | `POST` | `/statpitch/accounts/password` | 🔑 Closes every other session and hands back a fresh one |
 | `POST` | `/statpitch/accounts/sessions/revoke-all` | 🔑 Sign out everywhere, here included |
 | `POST` | `/statpitch/accounts/trial` | 🔑 Starts the 14-day Pro trial. Once per account, ever |
+| `POST` | `/statpitch/accounts/keys` | 🔑 Issue an API key (Elite). The only response carrying the secret |
+| `GET` | `/statpitch/accounts/keys` | 🔑 List keys — prefix, name, last used, revoked |
+| `DELETE` | `/statpitch/accounts/keys/{id}` | 🔑 Revoke a key |
 
 🔑 needs a customer session cookie plus the `X-CSRF-Token` header on unsafe
 methods, taken from the `csrf_token` in any account response body.
@@ -216,6 +219,31 @@ methods, taken from the `csrf_token` in any account response body.
 - **Registration is throttled on the same counter as login**, per address and per
   IP. Without that, an endpoint that runs an argon2 hash per request is a cheap
   way to burn the function's CPU budget.
+
+#### API keys
+
+Elite accounts can issue keys and read StatPitch programmatically:
+
+```bash
+curl -H "Authorization: Bearer sp_live_..." https://api.gabrielmayorga.dev/statpitch/fixtures/today
+```
+
+- **`Authorization: Bearer`, never `X-API-KEY`.** That header already means the
+  master key, which can write to the whole API; a customer key only reads
+  StatPitch. Two credentials with different powers sharing one header is how a
+  check ends up made against the wrong one.
+- **Only the SHA-256 is stored**, same as session tokens. The secret is returned
+  exactly once, at creation — a lost key is replaced, not recovered.
+- **The `sp_live_` prefix is deliberate**: it makes a leaked key recognisable to
+  a secret scanner, and identifiable in a support conversation.
+- **A key stops working when the tier lapses** (402), rather than quietly
+  dropping to free data — otherwise "API access" would not be gated at all. An
+  unknown or revoked key is 401, never a silent downgrade, so an integration is
+  told rather than left reading teasers.
+- **Revoked, never deleted.** A key that surfaces in a log a year later is still
+  identifiable. A lapsed account can still revoke keys it issued while Elite.
+- `last_used_at` is written at most once a day — enough to answer "can I revoke
+  this?" without a database write in front of every read.
 
 ### Tiers
 
