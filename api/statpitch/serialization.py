@@ -23,7 +23,7 @@ entirely is unambiguous; `locked` says why.
 
 from collections.abc import Container
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlmodel import SQLModel
 
@@ -94,6 +94,13 @@ class FixtureFullRead(FixtureFreeRead):
 
     odds_coverage: bool
     fully_rated: bool
+
+    # "AI confidence scoring" on the pricing page. Bands rather than a score: a
+    # number implies a precision these inputs cannot justify. `fully_rated` and
+    # the elo sources below are the raw material it is built from, kept so the
+    # band can be argued with rather than merely trusted.
+    confidence: Literal["low", "medium", "high"]
+    confidence_reasons: list[str]
 
     home_xg: float
     away_xg: float

@@ -286,6 +286,33 @@ There are three fixture shapes, because free predictions are rationed:
 - **Match of the Day never spends an unlock.** It is its own line on the pricing
   page, beside the three rather than one of them.
 
+#### Confidence bands
+
+`confidence` is `low`, `medium` or `high`, with a `confidence_reasons` list
+saying why. Pro and above; derived from the fixture's own columns rather than
+stored, so it cannot fall out of step with the numbers it describes.
+
+Two different things get called confidence, and the band keeps them apart:
+
+- **Decisiveness** — how one-sided the call is (`HIGH_CONFIDENCE_THRESHOLD`,
+  0.70, the same constant behind `high_confidence_today` in `/stats`).
+- **Trustworthiness** — how much the inputs behind it are worth.
+
+Data quality is allowed to veto. A 0.95 built on a club with no measured Elo is
+*less* reliable than a 0.72 built on two rated sides, so it bands **low** — the
+opposite of what a naive score would say, and the failure mode a subscriber
+would actually be hurt by.
+
+| | condition |
+|---|---|
+| `low` | a club fell back to a prior, or the weaker elo-poisson model produced the numbers |
+| `high` | both clubs measured, one outcome ≥ 70%, and a bookmaker price to compare against |
+| `medium` | everything else |
+
+Bands rather than a 0–100 score deliberately: a number implies a precision four
+boolean-ish inputs cannot justify, and invites reading a difference between 71
+and 68 that is not there.
+
 #### Match of the Day
 
 Chosen once, by the day's first sync, and then left alone. It used to be
