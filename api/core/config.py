@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     # The custom domain in front of the bucket. Never the R2 S3 endpoint: that
     # one stays credentialed and private.
     r2_public_base_url: str = "https://cdn.gabrielmayorga.dev"
+    # Key prefix every crest is written under. Object storage has no real
+    # folders — a prefix is what the dashboard renders as one — so this is the
+    # whole of what puts crests in their own place in a shared bucket. Leading
+    # and trailing slashes are stripped, and an empty value writes at the root.
+    r2_crest_prefix: str = "statpitch/crests"
 
     odds_api_key: str = ""
     odds_api_region: str = "eu"

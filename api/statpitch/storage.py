@@ -87,9 +87,19 @@ def content_hash(payload: bytes) -> str:
 
 
 def crest_key(slug: str, payload: bytes, size: int) -> str:
-    """Where a crest lives. Deterministic in the bytes, so re-running the
-    backfill on unchanged images produces the same key and uploads nothing."""
-    return f"crests/{slug}/{content_hash(payload)}-{size}.webp"
+    """Where a crest lives.
+
+    Deterministic in the bytes, so re-running the backfill on unchanged images
+    produces the same key and uploads nothing.
+
+    The prefix comes from `r2_crest_prefix` because the bucket is shared with
+    other projects. There are no real folders in object storage — a prefix is
+    simply what the dashboard draws as one — so this is the entire mechanism
+    that keeps crests out of everything else's way.
+    """
+    prefix = settings.r2_crest_prefix.strip("/")
+    stem = f"{slug}/{content_hash(payload)}-{size}.webp"
+    return f"{prefix}/{stem}" if prefix else stem
 
 
 def public_url(key: str) -> str:
