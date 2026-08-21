@@ -49,6 +49,12 @@ _NOISE_TOKENS: frozenset[str] = frozenset(
         "spvgg",
         "bv",
         "borussia",
+        # French club-form words. Without these, "Stade Brestois 29" and "Stade
+        # Rennais" share a token and score 0.74 against each other, while the
+        # correct "Brest" manages only 0.53 — the crest backfill matched Brest to
+        # Rennes on exactly that.
+        "stade",
+        "olympique",
         "club",
         "calcio",
         "futbol",
@@ -85,6 +91,15 @@ _ALIASES: dict[str, str] = {
     "bayer 04 leverkusen": "bayer leverkusen",
     "1899 hoffenheim": "hoffenheim",
     "sankt pauli": "st pauli",
+    # Keys are matched against the *cleaned* form, so these read as post-noise
+    # tokens: "Olympique Lyonnais" arrives here as "lyonnais".
+    "lyonnais": "lyon",
+    "internazionale milano": "inter milan",
+    # Both would otherwise tie against two different clubs — "deportivo alaves"
+    # resembles Alaves and Deportivo equally, "espanyol barcelona" resembles
+    # Espanyol and Barcelona equally — and a tie is refused rather than guessed.
+    "deportivo alaves": "alaves",
+    "espanyol barcelona": "espanyol",
 }
 
 _PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)

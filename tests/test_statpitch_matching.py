@@ -15,7 +15,21 @@ class TestNormalize:
 
     def test_drops_corporate_prefixes(self):
         assert normalize("FC Barcelona") == "barcelona"
-        assert normalize("RCD Espanyol de Barcelona") == "espanyol barcelona"
+        assert normalize("Real Sociedad de Fútbol") == "real sociedad"
+
+    def test_drops_french_club_forms(self):
+        # Without these, "Stade Brestois 29" and "Stade Rennais" share a token
+        # and score 0.74 against each other, while the correct "Brest" manages
+        # 0.53 — which is how the crest backfill matched Brest to Rennes.
+        assert normalize("Stade Brestois 29") == "brestois"
+        assert normalize("Stade Rennais") == "rennais"
+        assert normalize("Olympique de Marseille") == "marseille"
+
+    def test_espanyol_resolves_rather_than_staying_ambiguous(self):
+        # "espanyol barcelona" resembles Espanyol and Barcelona about equally,
+        # so an alias settles it. Both sources call them Espanyol.
+        assert normalize("RCD Espanyol de Barcelona") == "espanyol"
+        assert normalize("Espanyol") == "espanyol"
 
     def test_keeps_deportivo_which_is_a_real_name(self):
         # "Deportivo" is the club, not a suffix — dropping it would leave

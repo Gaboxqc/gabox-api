@@ -57,14 +57,17 @@ def test_spelling_variants_land_on_one_slug(left, right):
 @pytest.mark.parametrize(
     ("left", "right"),
     [
-        ("Espanyol", "RCD Espanyol de Barcelona"),
         ("Bayern Munich", "FC Bayern Munchen"),
+        ("Sporting", "Sporting Gijon"),
     ],
 )
 def test_cross_source_spellings_are_not_folded(left, right):
     """Pinning the limit, not a wish. The key is exact; joining another
     source's names onto these rows is `matching.similarity`'s job, and the crest
-    resolver is where that happens."""
+    resolver is where that happens.
+
+    Individual pairs can be folded deliberately by adding an alias — Espanyol
+    was moved out of this list that way — but nothing folds them automatically."""
     assert slug_for(left) != slug_for(right)
 
 
