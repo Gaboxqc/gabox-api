@@ -276,3 +276,93 @@ class ApiKeyIssued(ApiKeyRead):
     """
 
     key: str
+
+
+# ── Admin views ──────────────────────────────────────────────────────────────
+
+
+class AdminAccountRead(SQLModel):
+    """One customer as an administrator sees them.
+
+    `tier` is the raw column and `effective_tier` is what the account actually
+    has today. Both are here on purpose: a panel that showed only the effective
+    value would make a lapsed Elite look like it had been set to free, and an
+    admin about to extend it needs to see what was granted, not what expired.
+    """
+
+    id: int
+    email: str
+    is_active: bool
+    created_at: datetime
+    last_login_at: datetime | None = None
+    email_verified: bool = False
+
+    tier: str
+    effective_tier: Tier
+    tier_expires_at: datetime | None = None
+    tier_source: str
+    tier_updated_at: datetime | None = None
+    tier_updated_by: str | None = None
+
+    trial_used: bool = False
+    trial_used_at: datetime | None = None
+
+    # Counted rather than listed: a panel row wants to know there are three
+    # live sessions, not what they are.
+    active_sessions: int = 0
+    live_api_keys: int = 0
+
+    @classmethod
+    def of(
+        cls,
+        account: StatPitchAccount,
+        *,
+        active_sessions: int = 0,
+        live_api_keys: int = 0,
+    ) -> "AdminAccountRead":
+        return cls(
+            id=account.id,
+            email=account.email,
+            is_active=account.is_active,
+            created_at=account.created_at,
+            last_login_at=account.last_login_at,
+            email_verified=account.email_verified_at is not None,
+            tier=account.tier,
+            effective_tier=account.effective_tier,
+            tier_expires_at=account.tier_expires_at,
+            tier_source=account.tier_source,
+            tier_updated_at=account.tier_updated_at,
+            tier_updated_by=account.tier_updated_by,
+            trial_used=account.trial_used_at is not None,
+            trial_used_at=account.trial_used_at,
+            active_sessions=active_sessions,
+            live_api_keys=live_api_keys,
+        )
+
+
+class AdminAccountCreateRequest(_EmailPayload):
+    """Creating an account takes an address and nothing else.
+
+    Deliberately no password field. An admin typing somebody else's password
+    puts a plaintext credential through a form, a request body and very likely a
+    log; generating one and showing it once keeps it out of all three. The
+    account holder changes it at `/statpitch/accounts/password`.
+    """
+
+
+class AdminAccountCreated(AdminAccountRead):
+    """The one response carrying the generated password. Shown once, never
+    stored in a readable form, and not recoverable — reset it instead."""
+
+    temporary_password: str
+
+
+class AdminAccountUpdateRequest(SQLModel):
+    """Deactivating is the reversible half of removing somebody.
+
+    It stops login immediately and keeps their history, which is what a support
+    conversation almost always wants. Deleting is the other route and is not
+    undoable.
+    """
+
+    is_active: bool
