@@ -321,6 +321,33 @@ class StatPitchFixture(SQLModel, table=True):
     # track record was not banked first.
     ledgered: bool = Field(default=False, index=True)
 
+    # ── Confidence ────────────────────────────────────────────────────────────
+    # Derived, not stored: it is a pure function of the columns above, so a
+    # column would only be a second copy that could fall out of step with them.
+    # Exposed as properties so the read schemas pick them up by attribute.
+
+    @property
+    def _confidence(self):
+        from api.statpitch.confidence import assess
+
+        return assess(
+            prediction_source=self.prediction_source,
+            fully_rated=self.fully_rated,
+            home_elo_source=self.home_elo_source,
+            away_elo_source=self.away_elo_source,
+            home_win_prob=self.home_win_prob,
+            away_win_prob=self.away_win_prob,
+            has_price=self.odds_home is not None,
+        )
+
+    @property
+    def confidence(self) -> str:
+        return self._confidence.band
+
+    @property
+    def confidence_reasons(self) -> list[str]:
+        return self._confidence.reasons
+
 
 # ==============================================================================
 # SETTLED BET LEDGER  (permanent)
