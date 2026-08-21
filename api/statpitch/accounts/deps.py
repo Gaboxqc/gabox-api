@@ -22,18 +22,24 @@ import secrets
 from typing import Annotated
 
 from fastapi import Cookie, Depends, Header, HTTPException, Request, Security, status
-from fastapi.security import APIKeyHeader
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 from api.core.config import settings
 from api.core.database import SessionDep
+from api.statpitch.accounts.keys import load_live_key, touch
 from api.statpitch.accounts.models import StatPitchAccount, StatPitchAccountSession, Tier
 from api.statpitch.accounts.sessions import load_valid_session, touch_session
+from api.statpitch.tiers import Feature, allows
 
 CSRF_HEADER_NAME = "X-CSRF-Token"
 
 # auto_error=False so a missing key is simply an anonymous caller rather
 # than a 403 — these routes are readable without any credential at all.
 _api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
+
+# Customer keys travel as `Authorization: Bearer sp_live_...`, kept off
+# X-API-KEY so a customer credential can never be mistaken for the master one.
+_bearer = HTTPBearer(auto_error=False, scheme_name="StatPitch API key")
 
 # Methods that cannot change state, so they need no CSRF token.
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -47,6 +53,19 @@ _UNAUTHENTICATED = HTTPException(
 _CSRF_FAILED = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="Missing or invalid CSRF token.",
+)
+
+# A key that does not resolve. Distinct from anonymity: presenting a bad
+# credential is an error, whereas presenting none is simply the free tier.
+_BAD_KEY = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Invalid or revoked API key.",
+    headers={"WWW-Authenticate": "Bearer"},
+)
+
+_API_ACCESS_REQUIRED = HTTPException(
+    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+    detail="API access is an Elite feature.",
 )
 
 
@@ -146,16 +165,52 @@ def tier_of(account: StatPitchAccount | None) -> Tier:
     return account.effective_tier if account is not None else "free"
 
 
+async def account_from_key(
+    db: SessionDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)] = None,
+) -> StatPitchAccount | None:
+    """The account behind a customer API key, or None if none was presented.
+
+    Raises rather than returning None when a key *is* presented and does not
+    work: silently falling back to the free tier would leave an integration
+    quietly reading teasers with no idea its key had been revoked.
+    """
+    if credentials is None or not credentials.credentials:
+        return None
+
+    key = load_live_key(db, credentials.credentials)
+    if key is None:
+        raise _BAD_KEY
+
+    account = db.get(StatPitchAccount, key.account_id)
+    if account is None or not account.is_active:
+        raise _BAD_KEY
+
+    # API access is itself the Elite line. A lapsed subscription stops the key
+    # working rather than quietly demoting it to free data — otherwise "API
+    # access" would not be gated at all.
+    if not allows(account.effective_tier, Feature.API_ACCESS):
+        raise _API_ACCESS_REQUIRED
+
+    touch(db, key)
+    return account
+
+
 async def current_tier(
     account: Annotated[StatPitchAccount | None, Depends(optional_account)],
+    key_account: Annotated[StatPitchAccount | None, Depends(account_from_key)] = None,
     api_key: Annotated[str | None, Security(_api_key_header)] = None,
 ) -> Tier:
-    """What the caller may see, master key included.
+    """What the caller may see, whichever credential they brought.
 
-    The master key has no *account* — `/accounts/me` still refuses it, because
-    a machine key is nobody. But it does have full *entitlement*: it is the
-    owner's key, the admin dashboard carries it, and denying Gabriel his own
-    ledger because he is not a paying subscriber would be absurd.
+    Three ways in, in descending authority:
+
+    1. The **master key**, which has no *account* — `/accounts/me` still refuses
+       it, because a machine key is nobody. It does have full *entitlement*: it
+       is the owner's key, the admin dashboard carries it, and denying Gabriel
+       his own ledger because he is not a paying subscriber would be absurd.
+    2. A **customer API key**, which resolves to its owner's tier.
+    3. A **session cookie**, or nothing at all, which is the free tier.
 
     Identity and entitlement are separate questions, and this is the one place
     they are answered differently.
@@ -164,6 +219,8 @@ async def current_tier(
         api_key.encode("utf-8"), settings.api_master_key.encode("utf-8")
     ):
         return "elite"
+    if key_account is not None:
+        return key_account.effective_tier
     return tier_of(account)
 
 
