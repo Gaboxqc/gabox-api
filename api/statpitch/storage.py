@@ -22,6 +22,7 @@ Install it with `pip install -e ".[crests]"`.
 
 import hashlib
 import logging
+import re
 from functools import lru_cache
 from typing import Any
 
@@ -86,6 +87,21 @@ def content_hash(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
+_UNSAFE_IN_A_KEY = re.compile(r"[^a-z0-9]+")
+
+
+def key_slug(slug: str) -> str:
+    """A registry slug, made safe to put in a URL path.
+
+    Registry slugs are space-separated tokens — `matching.normalize` produces
+    "rayo vallecano madrid" — which is right for matching and wrong for a key.
+    Object storage accepts the spaces, and then every URL built from one carries
+    a raw space: invalid in an href, mangled in logs, and encoded differently by
+    whichever client touches it first.
+    """
+    return _UNSAFE_IN_A_KEY.sub("-", slug.strip().lower()).strip("-")
+
+
 def crest_key(slug: str, payload: bytes, size: int) -> str:
     """Where a crest lives.
 
@@ -98,7 +114,7 @@ def crest_key(slug: str, payload: bytes, size: int) -> str:
     that keeps crests out of everything else's way.
     """
     prefix = settings.r2_crest_prefix.strip("/")
-    stem = f"{slug}/{content_hash(payload)}-{size}.webp"
+    stem = f"{key_slug(slug)}/{content_hash(payload)}-{size}.webp"
     return f"{prefix}/{stem}" if prefix else stem
 
 
