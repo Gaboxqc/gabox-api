@@ -10,6 +10,7 @@ from api.core.health import router as health_router
 from api.core.logging import configure_logging
 from api.portfolio.routers import portfolio_router
 from api.statpitch.routers import statpitch_router
+from api.statpitch.routers.fixtures import QUOTA_HEADER
 
 
 def create_app() -> FastAPI:
@@ -38,8 +39,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         # A cross-origin response's custom headers are invisible to JavaScript
         # unless they are listed here, so the dashboard's pagination would read
-        # undefined without this.
-        expose_headers=["X-Total-Count"],
+        # undefined without this — as would StatPitch's remaining-predictions
+        # count, which is the whole signal behind the free tier's upsell.
+        expose_headers=["X-Total-Count", QUOTA_HEADER],
     )
 
     register_exception_handlers(app)

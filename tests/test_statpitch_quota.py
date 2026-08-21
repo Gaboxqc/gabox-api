@@ -306,3 +306,17 @@ def test_the_master_key_is_never_rationed(client, auth, make_fixture, seed_fixtu
     response = client.get(f"/statpitch/fixtures/{fixture.id}", headers=auth)
     assert response.headers[QUOTA_HEADER] == "unlimited"
     assert response.json()["locked"] is False
+
+
+def test_the_quota_header_is_readable_cross_origin(client, signup, make_fixture, seed_fixtures):
+    """A custom header is invisible to JavaScript unless CORS lists it, so the
+    count was being set and then silently dropped before the frontend saw it."""
+    seed_fixtures(make_fixture())
+    signup()
+
+    response = client.get("/statpitch/fixtures/today", headers={"Origin": "http://localhost:5173"})
+    exposed = {
+        name.strip()
+        for name in response.headers.get("access-control-expose-headers", "").split(",")
+    }
+    assert QUOTA_HEADER in exposed
