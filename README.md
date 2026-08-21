@@ -383,9 +383,10 @@ Needs the optional extra (`pip install -e ".[crests]"`) and R2 credentials.
   overwrite, which is what you want after changing the encoder, since the key
   names the source rather than the encoded bytes.
 - **Two sizes, and every size of a club shares one key.** `crest_url` points at
-  the 128px file (~7 KB, for fixture lists); swap `-128.webp` for `-512.webp` to
-  get the native-resolution copy (~25 KB, for detail views and high-DPI screens).
-  The hash names the *source*, which is what makes that swap work.
+  the native-resolution 512px file (~25 KB), so a crest is sharp at any render
+  size or pixel density; swap `-512.webp` for `-128.webp` to get the ~7 KB copy,
+  which is what a dense fixture list wants. The hash names the *source*, which
+  is what makes that swap work.
 - **512 is the real ceiling.** ESPN's art is 500×500 and its 1000px URL is only
   an upscale of the same pixels. At 512 the badge is never resampled, so the
   original stays pixel-perfect; smaller sizes are a LANCZOS downscale.

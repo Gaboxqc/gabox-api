@@ -52,9 +52,14 @@ MIN_CREST_MARGIN = 0.08
 # 560KB of badges nobody is looking closely at.
 CREST_SIZES: tuple[int, ...] = (512, 128)
 
-# Which size a `crest_url` points at. The other sizes are reachable by swapping
-# the suffix, because every size of a club shares one hash — see `crest_key`.
-DEFAULT_CREST_SIZE = 128
+# Which size a `crest_url` points at. Native resolution, so a crest is sharp
+# wherever it is rendered and on any pixel density, at roughly 25KB.
+#
+# The cheaper 128px file (~7KB) is still there and is reachable by swapping the
+# suffix — every size of a club shares one hash, see `crest_key`. A dense
+# fixture list is the case that wants it: forty native-size badges is about a
+# megabyte, against 280KB.
+DEFAULT_CREST_SIZE = 512
 
 
 @dataclass(frozen=True)
