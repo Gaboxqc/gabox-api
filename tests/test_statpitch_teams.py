@@ -15,15 +15,16 @@ from api.statpitch.teams import (
 )
 
 
-def _fixture(home: str, away: str, competition_id: str = "ENG.PL") -> StatPitchFixture:
-    """A fixture with only the fields the registry looks at."""
+def _fixture(competition_id: str = "ENG.PL") -> StatPitchFixture:
+    """A fixture with only the fields the registry looks at.
+
+    No club names: those are what `link_fixtures` is being asked to attach.
+    """
     return StatPitchFixture(
-        fixture_id=f"{home}-{away}",
+        fixture_id=f"f-{competition_id}-{id(object())}",
         competition_id=competition_id,
         match_date=date(2026, 8, 20),
         source_date=date(2026, 8, 20),
-        home_team=home,
-        away_team=away,
         model_version="test",
         home_xg=1.4,
         away_xg=1.1,
@@ -128,58 +129,64 @@ def test_looking_up_nothing_asks_the_database_nothing(engine):
 
 def test_linking_registers_both_sides(engine):
     with Session(engine) as db:
-        clubs, missing = link_fixtures(db, [_fixture("Arsenal", "Chelsea")])
+        fixture = _fixture()
+        clubs, missing = link_fixtures(db, [(fixture, "Arsenal", "Chelsea")])
 
         assert clubs == 2
         # Two sides, neither with a crest yet.
         assert missing == 2
         assert {row.slug for row in db.exec(select(StatPitchTeam)).all()} == {"arsenal", "chelsea"}
+        assert fixture.home_team_id is not None
+        assert fixture.away_team_id is not None
 
 
 def test_a_club_appearing_twice_is_registered_once(engine):
     with Session(engine) as db:
         clubs, _ = link_fixtures(
             db,
-            [_fixture("Arsenal", "Chelsea"), _fixture("Arsenal", "Everton")],
+            [
+                (_fixture(), "Arsenal", "Chelsea"),
+                (_fixture(), "Arsenal", "Everton"),
+            ],
         )
 
         assert clubs == 3
         assert len(db.exec(select(StatPitchTeam)).all()) == 3
 
 
-def test_a_known_crest_is_copied_onto_the_fixture(engine):
+def test_a_fixture_reads_its_clubs_through_the_reference(engine):
+    """The names are not copied onto the row any more — they are read back."""
     with Session(engine) as db:
-        team = resolve_team(db, "Arsenal", "ENG.PL")
-        team.crest_url = "https://cdn.example.com/crests/arsenal/abc123-128.webp"
-        db.add(team)
+        fixture = _fixture()
+        link_fixtures(db, [(fixture, "Arsenal", "Chelsea")])
+        db.add(fixture)
+        db.commit()
+        db.refresh(fixture)
+
+        assert fixture.home_team == "Arsenal"
+        assert fixture.away_team == "Chelsea"
+
+
+def test_a_crest_reaches_a_fixture_immediately(engine):
+    """The point of the foreign key. The crest used to be snapshotted onto the
+    row, so one resolved after a fixture was cached stayed invisible to it until
+    the next sync overwrote the column."""
+    with Session(engine) as db:
+        fixture = _fixture()
+        link_fixtures(db, [(fixture, "Arsenal", "Chelsea")])
+        db.add(fixture)
         db.commit()
 
-        fixture = _fixture("Arsenal", "Chelsea")
-        _, missing = link_fixtures(db, [fixture])
-
-    assert fixture.home_crest_url == "https://cdn.example.com/crests/arsenal/abc123-128.webp"
-    assert fixture.away_crest_url is None
-    assert missing == 1
-
-
-def test_a_crest_added_later_reaches_the_next_sync(engine):
-    """The backfill runs separately from the sync, so a crest resolved on
-    Tuesday has to appear on Wednesday's fixtures without anything being
-    replayed."""
-    with Session(engine) as db:
-        before = _fixture("Arsenal", "Chelsea")
-        link_fixtures(db, [before])
-        assert before.home_crest_url is None
+        assert fixture.home_crest_url is None
 
         team = db.exec(select(StatPitchTeam).where(StatPitchTeam.slug == "arsenal")).one()
-        team.crest_url = "https://cdn.example.com/crests/arsenal/abc123-128.webp"
+        team.crest_url = "https://cdn.example.com/statpitch/crests/arsenal/abc123-512.webp"
         db.add(team)
         db.commit()
 
-        after = _fixture("Arsenal", "Chelsea")
-        link_fixtures(db, [after])
-
-    assert after.home_crest_url is not None
+        # No re-sync, no second pass, no refresh of the fixture.
+        assert fixture.home_crest_url == team.crest_url
+        assert fixture.away_crest_url is None
 
 
 def test_linking_nothing_is_harmless(engine):
@@ -191,8 +198,8 @@ def test_the_registry_survives_a_fixture_being_pruned(engine):
     """Fixtures live three days; the registry is permanent. Losing the crest
     with the cache is exactly what this table exists to prevent."""
     with Session(engine) as db:
-        fixture = _fixture("Arsenal", "Chelsea")
-        link_fixtures(db, [fixture])
+        fixture = _fixture()
+        link_fixtures(db, [(fixture, "Arsenal", "Chelsea")])
         db.add(fixture)
         db.commit()
 

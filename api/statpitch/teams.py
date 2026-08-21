@@ -118,28 +118,25 @@ def teams_by_slug(db: Session, slugs: set[str]) -> dict[str, StatPitchTeam]:
     return {row.slug: row for row in rows}
 
 
-def link_fixtures(db: Session, fixtures: list[StatPitchFixture]) -> tuple[int, int]:
-    """Register every club in `fixtures` and copy its crest onto the row.
+def link_fixtures(db: Session, pairs: list[tuple[StatPitchFixture, str, str]]) -> tuple[int, int]:
+    """Point each fixture at its two clubs, registering any it has not met.
+
+    Takes the club names alongside the row rather than reading them off it,
+    because the row no longer holds them — that is the whole point of the
+    foreign keys. `fixture.home_team` reads back through the relationship, which
+    cannot resolve until the id it is about to be given is set.
 
     Returns `(clubs_seen, sides_without_a_crest)`.
-
-    The crest URL is denormalised onto the fixture rather than joined at read
-    time. The fixture table is already a cache, the read path is a single-table
-    query that should stay that way, and the columns have been sitting there
-    unused since the schema was written.
     """
-    if not fixtures:
+    if not pairs:
         return 0, 0
 
-    wanted = {
-        slug_for(name) for fixture in fixtures for name in (fixture.home_team, fixture.away_team)
-    }
+    wanted = {slug_for(name) for _, home, away in pairs for name in (home, away)}
     known = teams_by_slug(db, wanted)
 
     missing_crest = 0
-    for fixture in fixtures:
-        for side in ("home", "away"):
-            name = getattr(fixture, f"{side}_team")
+    for fixture, home_name, away_name in pairs:
+        for side, name in (("home", home_name), ("away", away_name)):
             slug = slug_for(name)
 
             team = known.get(slug)
@@ -147,7 +144,7 @@ def link_fixtures(db: Session, fixtures: list[StatPitchFixture]) -> tuple[int, i
                 team = resolve_team(db, name, fixture.competition_id)
                 known[slug] = team
 
-            setattr(fixture, f"{side}_crest_url", team.crest_url)
+            setattr(fixture, f"{side}_team_id", team.id)
             if team.crest_url is None:
                 missing_crest += 1
 

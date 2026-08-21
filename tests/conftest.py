@@ -159,14 +159,17 @@ def project_fixture(create, seed) -> int:
 
 
 @pytest.fixture(name="make_fixture")
-def make_fixture_factory():
+def make_fixture_factory(engine):
     """Build a `StatPitchFixture` with plausible defaults.
 
     Probabilities are internally consistent (the 1X2 three sum to 1), so a test
     that only cares about odds does not have to restate the prediction.
     """
+    from sqlmodel import Session
+
     from api.statpitch.clock import today_local
     from api.statpitch.models import StatPitchFixture
+    from api.statpitch.teams import resolve_team
 
     counter = {"n": 0}
 
@@ -178,8 +181,6 @@ def make_fixture_factory():
             "competition_id": "ESP.LALIGA",
             "match_date": today,
             "source_date": today,
-            "home_team": f"Home {counter['n']}",
-            "away_team": f"Away {counter['n']}",
             "model_version": "goals-test-0001",
             "home_xg": 1.8,
             "away_xg": 1.0,
@@ -192,6 +193,17 @@ def make_fixture_factory():
             "btts_yes": 0.57,
             "btts_no": 0.43,
         }
+        # Clubs are a foreign key now, so a name has to become a registry row
+        # before it can go on a fixture. Resolving it here keeps
+        # `make_fixture(home_team="Arsenal")` reading exactly as it always has.
+        home = overrides.pop("home_team", f"Home {counter['n']}")
+        away = overrides.pop("away_team", f"Away {counter['n']}")
+        competition = overrides.get("competition_id", defaults["competition_id"])
+
+        with Session(engine) as db:
+            defaults["home_team_id"] = resolve_team(db, home, competition).id
+            defaults["away_team_id"] = resolve_team(db, away, competition).id
+
         defaults.update(overrides)
         return StatPitchFixture(**defaults)
 
@@ -200,7 +212,11 @@ def make_fixture_factory():
 
 @pytest.fixture(name="seed_fixtures")
 def seed_fixtures_factory(engine, make_fixture):
-    """Persist fixtures and return them, refreshed."""
+    """Persist fixtures and return them, refreshed.
+
+    Clubs are already registered by `make_fixture`, which is the same order the
+    sync uses: the registry is consulted before anything is stored.
+    """
     from sqlmodel import Session
 
     def _seed(*fixtures):
@@ -210,6 +226,9 @@ def seed_fixtures_factory(engine, make_fixture):
             db.commit()
             for fixture in fixtures:
                 db.refresh(fixture)
+                # Touch the relationships while the session is open, so a test
+                # reading `.home_team` afterwards is not left detached.
+                _ = fixture.home_team, fixture.away_team
         return list(fixtures)
 
     return _seed
