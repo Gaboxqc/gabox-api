@@ -65,8 +65,13 @@ def configured_competitions() -> set[str]:
     return {c.strip() for c in settings.statpitch_competitions if c.strip()}
 
 
-def _to_row(fixture: SPFixture, config_version: str | None) -> StatPitchFixture | None:
-    """Map a StatPitch fixture onto a database row.
+def _to_row(
+    fixture: SPFixture, config_version: str | None
+) -> tuple[StatPitchFixture, str, str] | None:
+    """Map a StatPitch fixture onto a database row and its two club names.
+
+    The names travel beside the row rather than on it: clubs are a foreign key
+    now, and the id cannot be assigned until the registry has been consulted.
 
     Returns None when the prediction is absent — a fixture with no numbers has
     nothing to show and nothing to price.
@@ -75,7 +80,7 @@ def _to_row(fixture: SPFixture, config_version: str | None) -> StatPitchFixture 
     if prediction is None:
         return None
 
-    return StatPitchFixture(
+    row = StatPitchFixture(
         fixture_id=fixture.fixture_id,
         competition_id=fixture.competition_id,
         season=fixture.season,
@@ -86,8 +91,6 @@ def _to_row(fixture: SPFixture, config_version: str | None) -> StatPitchFixture 
         source_date=fixture.date,
         kickoff=fixture.kickoff,
         date_confirmed=fixture.date_confirmed,
-        home_team=fixture.home_team,
-        away_team=fixture.away_team,
         neutral_venue=fixture.neutral_venue,
         odds_coverage=fixture.odds_coverage,
         prediction_source=fixture.prediction_source,
@@ -113,6 +116,7 @@ def _to_row(fixture: SPFixture, config_version: str | None) -> StatPitchFixture 
         correct_scores=[score.model_dump() for score in prediction.correct_scores] or None,
         explanation=fixture.explanation,
     )
+    return row, fixture.home_team, fixture.away_team
 
 
 def _attach_odds(row: StatPitchFixture, event: OddsEvent) -> None:
@@ -146,12 +150,10 @@ _REFRESHABLE = (
     "kickoff",
     "commence_time",
     "date_confirmed",
-    "home_team",
-    "away_team",
+    "home_team_id",
+    "away_team_id",
     "neutral_venue",
     "odds_coverage",
-    "home_crest_url",
-    "away_crest_url",
     "prediction_source",
     "model_version",
     "config_version",
@@ -286,7 +288,10 @@ async def run_sync(session: Session) -> SyncReport:
     report.model_version = fetched.model_version
     report.warnings.extend(fetched.warnings)
 
-    rows = [row for row in (_to_row(f, fetched.config_version) for f in fetched.fixtures) if row]
+    resolved = [
+        entry for entry in (_to_row(f, fetched.config_version) for f in fetched.fixtures) if entry
+    ]
+    rows = [row for row, _, _ in resolved]
 
     # ── 2. Prices ────────────────────────────────────────────────────────────
     try:
@@ -318,7 +323,7 @@ async def run_sync(session: Session) -> SyncReport:
     # ── 2b. Clubs and crests ─────────────────────────────────────────────────
     # Before the upsert, so a fixture is stored with its crest already attached
     # rather than gaining one a sync later.
-    report.clubs, report.missing_crests = link_fixtures(session, rows)
+    report.clubs, report.missing_crests = link_fixtures(session, resolved)
     if report.missing_crests:
         report.warnings.append(
             f"{report.missing_crests} fixture side(s) have no crest; "

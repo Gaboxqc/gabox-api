@@ -351,6 +351,20 @@ matches, and a screenshot was wrong by dinner.
 
 ### Club crests
 
+Fixtures reference clubs rather than copying them: `statpitch_fixture` holds
+`home_team_id` / `away_team_id`, and `home_team`, `away_team`,
+`home_crest_url` and `away_crest_url` are read back through the relationship —
+so the JSON shape is unchanged while a club's name and badge are stored in
+exactly one place. A crest resolved today is visible to a fixture cached
+yesterday immediately, with no sync in between. Both clubs are eager-loaded, so
+a twenty-fixture list is still one query.
+
+`home_team` / `away_team` remain real columns on `statpitch_settled_bet` and
+`statpitch_match_of_the_day`, deliberately: those are records rather than
+caches, and both have to stay readable after the fixture they came from is
+pruned.
+
+
 Clubs live in `statpitch_team`, which is permanent — unlike the fixtures, which
 are pruned every three days. The sync registers every club it sees; filling in
 the crest is a separate job:

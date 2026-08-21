@@ -13,13 +13,16 @@ three-day retention policy at all.
 """
 
 from datetime import UTC, date, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 from pydantic import Field as PydanticField
 from sqlalchemy import Column, UniqueConstraint
 from sqlalchemy.types import JSON
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, Relationship, SQLModel
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle, resolved at runtime
+    from api.statpitch.teams import StatPitchTeam
 
 # ==============================================================================
 # STATPITCH API RESPONSE SCHEMAS
@@ -220,16 +223,18 @@ class StatPitchFixture(SQLModel, table=True):
     # matchday placeholder and must not be rendered as a specific day.
     date_confirmed: bool = Field(default=False)
 
-    home_team: str
-    away_team: str
+    # The clubs, by reference. Names and crests live on `statpitch_team` and are
+    # read back through the `home_team` / `away_team` / `*_crest_url` properties
+    # below, so the JSON shape is unchanged — but there is now exactly one place
+    # a club's name or badge is stored, and a crest resolved after a fixture was
+    # cached is visible to it immediately rather than on the next sync.
+    home_team_id: int = Field(foreign_key="statpitch_team.id", index=True)
+    away_team_id: int = Field(foreign_key="statpitch_team.id", index=True)
+
     neutral_venue: bool = Field(default=False)
     # StatPitch's flag for whether *it* has an odds source. We price from The
     # Odds API independently, so this is informational, not a gate.
     odds_coverage: bool = Field(default=False)
-
-    # Null until a crest source is wired up — StatPitch does not supply one.
-    home_crest_url: str | None = Field(default=None)
-    away_crest_url: str | None = Field(default=None)
 
     # ── Provenance ────────────────────────────────────────────────────────────
     # fitted_goal_model, or elo-poisson for the measurably weaker fallback.
@@ -320,6 +325,40 @@ class StatPitchFixture(SQLModel, table=True):
     # Set once the ledger rows exist, so pruning can never drop a fixture whose
     # track record was not banked first.
     ledgered: bool = Field(default=False, index=True)
+
+    # ── Clubs ─────────────────────────────────────────────────────────────────
+    # Two foreign keys into one table, so SQLAlchemy has to be told which is
+    # which. `lazy="joined"` because every read of a fixture wants both clubs:
+    # left to itself this is the query that turns a forty-fixture list into
+    # eighty extra round trips.
+    home: "StatPitchTeam" = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "StatPitchFixture.home_team_id",
+            "lazy": "joined",
+        }
+    )
+    away: "StatPitchTeam" = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "StatPitchFixture.away_team_id",
+            "lazy": "joined",
+        }
+    )
+
+    @property
+    def home_team(self) -> str:
+        return self.home.display_name
+
+    @property
+    def away_team(self) -> str:
+        return self.away.display_name
+
+    @property
+    def home_crest_url(self) -> str | None:
+        return self.home.crest_url
+
+    @property
+    def away_crest_url(self) -> str | None:
+        return self.away.crest_url
 
     # ── Confidence ────────────────────────────────────────────────────────────
     # Derived, not stored: it is a pure function of the columns above, so a
@@ -579,3 +618,15 @@ class SyncResultRead(SQLModel):
     match_of_the_day: str | None = None
     model_version: str | None
     warnings: list[str] = []
+
+
+# The `home` / `away` relationships name `StatPitchTeam` as a string, which
+# SQLAlchemy resolves at mapper configuration — by which time the class has to
+# have been imported. Importing it here, at the foot of the module rather than
+# the head, makes `import api.statpitch.models` sufficient on its own: the cycle
+# is safe in this direction because `teams` only needs `StatPitchFixture`, which
+# is fully defined by the time this line runs.
+#
+# Without it the mapper fails only for callers that happen to import this module
+# alone — which the app never does and a script always does.
+from api.statpitch.teams import StatPitchTeam  # noqa: E402,F401  (see above)
