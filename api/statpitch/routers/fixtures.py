@@ -27,6 +27,8 @@ from api.statpitch.models import (
     SyncResultRead,
     ThreeDayWindow,
 )
+from api.statpitch.motd import choose as choose_match_of_the_day
+from api.statpitch.motd import fixture_for as match_of_the_day_fixture
 from api.statpitch.odds_service import OddsUnavailable
 from api.statpitch.quota import remaining, unlock, unlocked_ids
 from api.statpitch.serialization import (
@@ -153,6 +155,7 @@ async def sync(db: SessionDep):
         pruned=report.pruned,
         clubs=report.clubs,
         missing_crests=report.missing_crests,
+        match_of_the_day=report.match_of_the_day,
         model_version=report.model_version,
         warnings=report.warnings,
     )
@@ -285,15 +288,29 @@ async def best_today(db: SessionDep, response: Response, tier: CallerTier, accou
     """Every tier gets this — "Match of the Day pick" is its own line on the
     free column of the pricing page, listed beside the three daily predictions
     rather than counted among them. So it is always revealed and never spends an
-    unlock; free simply sees it at free depth."""
-    fixtures = _fixtures_on(db, current_window().today, tier)
-    if not fixtures:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No fixtures cached for today.",
+    unlock; free simply sees it at free depth.
+
+    The pick is chosen once by the day's first sync and then left alone, so it
+    does not wander as prices move. Recomputing here is only the fallback for a
+    day whose sync has not run yet — and it deliberately does not write, because
+    a read request is the wrong place to decide something the whole product then
+    has to agree on.
+    """
+    today = current_window().today
+    best = match_of_the_day_fixture(db, today)
+
+    if best is None:
+        fixtures = _fixtures_on(db, today, tier)
+        if not fixtures:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No fixtures cached for today.",
+            )
+        best = choose_match_of_the_day(fixtures) or max(
+            fixtures, key=lambda f: max(f.home_win_prob, f.away_win_prob)
         )
-    best = max(fixtures, key=lambda f: max(f.home_win_prob, f.away_win_prob))
-    _report_quota(response, db, account, tier, current_window().today)
+
+    _report_quota(response, db, account, tier, today)
     return serialize_fixture(best, tier, unlocked=True)
 
 
