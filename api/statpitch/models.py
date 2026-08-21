@@ -549,5 +549,6 @@ class SyncResultRead(SQLModel):
     # render without a crest.
     clubs: int = 0
     missing_crests: int = 0
+    match_of_the_day: str | None = None
     model_version: str | None
     warnings: list[str] = []

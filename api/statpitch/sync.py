@@ -31,6 +31,7 @@ from api.statpitch.clock import Window, current_window, to_local_date
 from api.statpitch.leagues import STATPITCH_ODDS_COVERAGE
 from api.statpitch.matching import best_match
 from api.statpitch.models import SPFixture, StatPitchFixture
+from api.statpitch.motd import ensure as ensure_match_of_the_day
 from api.statpitch.odds_service import OddsEvent, OddsUnavailable, fetch_odds
 from api.statpitch.pricing import apply_pricing
 from api.statpitch.scores_service import fetch_scores
@@ -51,6 +52,8 @@ class SyncReport:
     ledgered: int = 0
     pruned: int = 0
     clubs: int = 0
+    # Whatever was picked, or already stood, for today.
+    match_of_the_day: str | None = None
     # Sides rendering without a crest. Non-fatal — the UI falls back to a
     # monogram — but a jump here means the registry needs a backfill run.
     missing_crests: int = 0
@@ -323,6 +326,14 @@ async def run_sync(session: Session) -> SyncReport:
         )
 
     report.stored = _upsert(session, rows)
+
+    # ── 2c. Match of the day ─────────────────────────────────────────────────
+    # After the upsert, so the pick refers to a fixture that is actually stored.
+    # Idempotent: the second sync of the day must not move it because a price
+    # moved.
+    todays = [row for row in rows if row.match_date == window.today]
+    pick = ensure_match_of_the_day(session, window.today, todays)
+    report.match_of_the_day = None if pick is None else f"{pick.home_team} vs {pick.away_team}"
 
     # ── 3. Results ───────────────────────────────────────────────────────────
     unsettled = session.exec(

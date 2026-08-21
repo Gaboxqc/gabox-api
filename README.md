@@ -174,7 +174,7 @@ Each of the three resources above carries per-language content:
 | `GET` | `/statpitch/fixtures` | The three-day window. Filter by `day`, `competition_id`, `value_bets_only` |
 | `GET` | `/statpitch/fixtures/window` | The three local dates currently cached |
 | `GET` | `/statpitch/fixtures/yesterday` \| `/today` \| `/tomorrow` | |
-| `GET` | `/statpitch/fixtures/today/best` | Highest win probability |
+| `GET` | `/statpitch/fixtures/today/best` | Match of the Day — picked once by the day's first sync |
 | `GET` | `/statpitch/fixtures/today/value-bets` | Positive edge, strongest Kelly first |
 | `GET` | `/statpitch/fixtures/{id}` | |
 | `GET` | `/statpitch/stats` | Today's shape plus rolling 7/30-day ROI |
@@ -285,6 +285,28 @@ There are three fixture shapes, because free predictions are rationed:
   — so signing up is what reveals the first prediction.
 - **Match of the Day never spends an unlock.** It is its own line on the pricing
   page, beside the three rather than one of them.
+
+#### Match of the Day
+
+Chosen once, by the day's first sync, and then left alone. It used to be
+recomputed per request, which meant it moved during the day as each sync
+refreshed the model — two readers an hour apart could be looking at different
+matches, and a screenshot was wrong by dinner.
+
+- **The model's clearest call**, not its best bet: `max(home_win_prob,
+  away_win_prob)`. A bet needs a price, and a pick everybody can see must not
+  depend on odds coverage. A confident *draw* is excluded — nobody wants that
+  recommended.
+- **A confirmed kickoff beats a stronger placeholder.** ~88% of fixtures upstream
+  sit on a matchday placeholder, and billing one as today's match is a claim the
+  schedule does not support.
+- **Drawn from the five free-visible leagues**, so free and Elite are shown the
+  same match at different depth. Picking globally would name a Champions League
+  tie free accounts are never shown.
+- **A vanished pick is replaced** — a postponement should not leave the day
+  pointing at a match nobody can open.
+- The row outlives the fixture it names, so the decision is still readable after
+  the three-day cache has dropped it.
 - Every fixture response carries `X-Predictions-Remaining`, either a count or
   `unlimited`.
 - **`/stats`, `/ledger` and `/fixtures/today/value-bets` return 402** below Pro.
