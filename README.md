@@ -373,6 +373,9 @@ Needs the optional extra (`pip install -e ".[crests]"`) and R2 credentials.
   undocumented, so this stays a *seeding-time* dependency: if it changes shape
   tomorrow, every crest already fetched keeps serving. Hotlinking would put a
   third party's config change in front of paying users.
+- **Everything lands under one prefix** (`R2_CREST_PREFIX`, default
+  `statpitch/crests`), so a bucket shared with other projects stays tidy. Object
+  storage has no real folders — the prefix is what the dashboard draws as one.
 - **Keys contain a hash of the image**, written `immutable` with a one-year TTL.
   A changed crest is a new key plus a column update — no purge to forget, no
   window serving something stale, and rollback is a column update too. Re-running

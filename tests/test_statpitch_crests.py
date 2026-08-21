@@ -232,10 +232,31 @@ def test_each_size_gets_its_own_key():
     assert storage.crest_key("arsenal", b"badge", 128) != storage.crest_key("arsenal", b"badge", 64)
 
 
-def test_a_key_is_namespaced_by_club():
+def test_a_key_is_namespaced_by_club_under_the_configured_prefix():
     key = storage.crest_key("arsenal", b"badge", 128)
-    assert key.startswith("crests/arsenal/")
-    assert key.endswith("-128.webp")
+    assert (
+        key
+        == f"{storage.settings.r2_crest_prefix}/arsenal/{storage.content_hash(b'badge')}-128.webp"
+    )
+
+
+def test_the_prefix_keeps_crests_out_of_a_shared_bucket(monkeypatch):
+    """The bucket holds other projects, so everything lands under one prefix."""
+    monkeypatch.setattr(storage.settings, "r2_crest_prefix", "statpitch/crests", raising=False)
+    assert storage.crest_key("arsenal", b"badge", 64).startswith("statpitch/crests/arsenal/")
+
+
+def test_stray_slashes_in_the_prefix_do_not_double_up(monkeypatch):
+    monkeypatch.setattr(storage.settings, "r2_crest_prefix", "/statpitch/crests/", raising=False)
+    key = storage.crest_key("arsenal", b"badge", 64)
+
+    assert key.startswith("statpitch/crests/arsenal/")
+    assert "//" not in key
+
+
+def test_an_empty_prefix_writes_at_the_root(monkeypatch):
+    monkeypatch.setattr(storage.settings, "r2_crest_prefix", "", raising=False)
+    assert storage.crest_key("arsenal", b"badge", 64).startswith("arsenal/")
 
 
 def test_the_public_url_never_doubles_a_slash(monkeypatch):
