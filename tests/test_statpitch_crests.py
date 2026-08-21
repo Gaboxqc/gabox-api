@@ -144,11 +144,13 @@ def test_nothing_close_is_refused():
 
 
 def test_an_ambiguous_pair_is_refused():
-    """The real case: La Liga holds both Espanyol and Barcelona, and the
-    registry holds "RCD Espanyol de Barcelona", which resembles each about
-    equally. Guessing here puts Barcelona's badge on an Espanyol fixture."""
-    candidates = [_team("Espanyol", team_id="1"), _team("Barcelona", team_id="2")]
-    assert match_team("RCD Espanyol de Barcelona", candidates) is None
+    """A bare "Sporting" resembles Gijon and Lisbon about equally. Guessing puts
+    one club's badge on the other's fixture, which is worse than no badge.
+
+    Espanyol used to be the example here, until an alias settled it — the
+    ambiguity is real, the specific clubs are not the point."""
+    candidates = [_team("Sporting Gijon", team_id="1"), _team("Sporting Lisbon", team_id="2")]
+    assert match_team("Sporting", candidates) is None
 
 
 def test_matching_against_nothing_is_refused():
@@ -179,8 +181,8 @@ def test_a_club_missing_from_its_own_league_is_found_elsewhere():
 
 def test_the_widened_pass_still_refuses_a_guess():
     """Widening trades a miss for a possible match, never for a guess."""
-    everywhere = [_team("Espanyol", team_id="1"), _team("Barcelona", team_id="2")]
-    assert resolve_crest("RCD Espanyol de Barcelona", [], everywhere) is None
+    everywhere = [_team("Real Madrid", team_id="1"), _team("Real Betis", team_id="2")]
+    assert resolve_crest("Real", [], everywhere) is None
 
 
 def test_a_hit_in_the_home_league_is_not_second_guessed():
@@ -199,8 +201,8 @@ def test_the_report_separates_a_miss_from_an_ambiguity():
     so the report has to tell them apart."""
     nothing_close = describe_failure("Real Madrid", [_team("Arsenal")])
     ambiguous = describe_failure(
-        "RCD Espanyol de Barcelona",
-        [_team("Espanyol", team_id="1"), _team("Barcelona", team_id="2")],
+        "Sporting",
+        [_team("Sporting Gijon", team_id="1"), _team("Sporting Lisbon", team_id="2")],
     )
 
     assert "nothing close" in nothing_close
@@ -324,3 +326,25 @@ def test_re_encoding_is_what_sanitises_the_file():
 
     assert b"<script>" not in smuggled
     assert smuggled == clean
+
+
+def test_a_key_never_contains_a_space():
+    """Registry slugs are space-separated tokens, which object storage accepts
+    and every URL built from one then carries — invalid in an href, and encoded
+    differently by whichever client touches it first."""
+    key = storage.crest_key("rayo vallecano madrid", b"badge", 128)
+
+    assert " " not in key
+    assert "rayo-vallecano-madrid" in key
+
+
+def test_key_slugs_are_url_safe():
+    assert storage.key_slug("Real Betis") == "real-betis"
+    assert storage.key_slug("  inter milan  ") == "inter-milan"
+    assert storage.key_slug("alavés") == "alav-s"
+    assert storage.key_slug("arsenal") == "arsenal"
+
+
+def test_key_slugs_do_not_start_or_end_with_a_separator():
+    assert not storage.key_slug("1. fc union").startswith("-")
+    assert not storage.key_slug("schalke 04 ").endswith("-")
