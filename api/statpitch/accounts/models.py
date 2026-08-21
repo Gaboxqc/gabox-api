@@ -393,3 +393,23 @@ class TierGrantRead(SQLModel):
     reason: str
     granted_by: str
     granted_at: datetime
+
+
+class AdminSessionRead(SQLModel):
+    """One of an account's sessions, as an administrator sees it.
+
+    No token and no CSRF value — only the hash of the former is stored anyway,
+    and neither belongs in a response. What is here is what makes a session
+    recognisable to the person who opened it: when, from where, and on what.
+    """
+
+    id: int
+    created_at: datetime
+    last_used_at: datetime
+    expires_at: datetime
+    revoked: bool = False
+    # Live means usable right now: not revoked, not past its expiry. A support
+    # conversation is about these and not about the rest.
+    live: bool = False
+    ip_address: str | None = None
+    user_agent: str | None = None
