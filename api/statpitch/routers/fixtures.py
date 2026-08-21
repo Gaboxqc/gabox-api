@@ -16,7 +16,7 @@ from sqlmodel import col, func, select
 from api.core.database import SessionDep
 from api.core.deps import PageDep
 from api.core.security import validate_api_key
-from api.statpitch.accounts.deps import CallerTier
+from api.statpitch.accounts.deps import CallerTier, CurrentAccount
 from api.statpitch.client import StatPitchError, StatPitchRefusal
 from api.statpitch.clock import current_window
 from api.statpitch.models import (
@@ -28,9 +28,11 @@ from api.statpitch.models import (
     ThreeDayWindow,
 )
 from api.statpitch.odds_service import OddsUnavailable
+from api.statpitch.quota import remaining, unlock, unlocked_ids
 from api.statpitch.serialization import (
     FixtureFreeRead,
     FixtureFullRead,
+    FixtureTeaserRead,
     serialize_fixture,
     serialize_fixtures,
 )
@@ -42,7 +44,11 @@ from api.statpitch.tiers import Feature, allows, visible_competitions
 # only the free model would be worse than undocumented: FastAPI filters the
 # response *down* to the declared model, silently truncating every paid caller
 # to the free shape.
-FixtureResponse = FixtureFullRead | FixtureFreeRead
+FixtureResponse = FixtureFullRead | FixtureFreeRead | FixtureTeaserRead
+
+# How many predictions the caller may still reveal today. `unlimited` for a
+# paid tier, so the frontend never has to infer it from a tier name.
+QUOTA_HEADER = "X-Predictions-Remaining"
 
 log = logging.getLogger("statpitch.routes")
 
@@ -64,6 +70,17 @@ def _scoped(query, tier: str):
     cannot see and then withholding them makes pagination lie.
     """
     return query.where(col(StatPitchFixture.competition_id).in_(visible_competitions(tier)))
+
+
+def _report_quota(response: Response, db: SessionDep, account, tier: str, day) -> None:
+    """Tell the caller what is left, on every fixture response.
+
+    A header rather than a body field: it belongs to the request, not to any one
+    fixture, and putting it in the body would mean repeating it forty times in a
+    list.
+    """
+    left = remaining(db, account, tier, day)
+    response.headers[QUOTA_HEADER] = "unlimited" if left is None else str(left)
 
 
 def _require(feature: Feature, tier: str) -> None:
@@ -155,6 +172,7 @@ async def list_fixtures(
     db: SessionDep,
     response: Response,
     tier: CallerTier,
+    account: CurrentAccount,
     day: Annotated[DayName | None, Query(description="Restrict to one of the three days")] = None,
     competition_id: Annotated[str | None, Query()] = None,
     value_bets_only: Annotated[bool, Query(description="Only fixtures with a Kelly pick")] = False,
@@ -185,7 +203,11 @@ async def list_fixtures(
             StatPitchFixture.id,
         )
     ).all()
-    return serialize_fixtures(rows, tier)
+
+    # Listing never spends an unlock. Browsing what is on today is not the thing
+    # being sold, and charging for it would make the fixture list useless.
+    _report_quota(response, db, account, tier, current_window().today)
+    return serialize_fixtures(rows, tier, unlocked_ids=unlocked_ids(db, account))
 
 
 @router.get(
@@ -207,8 +229,15 @@ async def get_window():
     response_model=list[FixtureResponse],
     summary="Today's fixtures, in local time",
 )
-async def fixtures_today(db: SessionDep, tier: CallerTier):
-    return serialize_fixtures(_fixtures_on(db, current_window().today, tier), tier)
+async def fixtures_today(
+    db: SessionDep, response: Response, tier: CallerTier, account: CurrentAccount
+):
+    _report_quota(response, db, account, tier, current_window().today)
+    return serialize_fixtures(
+        _fixtures_on(db, current_window().today, tier),
+        tier,
+        unlocked_ids=unlocked_ids(db, account),
+    )
 
 
 @router.get(
@@ -216,8 +245,15 @@ async def fixtures_today(db: SessionDep, tier: CallerTier):
     response_model=list[FixtureResponse],
     summary="Yesterday's fixtures, with results where they have settled",
 )
-async def fixtures_yesterday(db: SessionDep, tier: CallerTier):
-    return serialize_fixtures(_fixtures_on(db, current_window().yesterday, tier), tier)
+async def fixtures_yesterday(
+    db: SessionDep, response: Response, tier: CallerTier, account: CurrentAccount
+):
+    _report_quota(response, db, account, tier, current_window().today)
+    return serialize_fixtures(
+        _fixtures_on(db, current_window().yesterday, tier),
+        tier,
+        unlocked_ids=unlocked_ids(db, account),
+    )
 
 
 @router.get(
@@ -225,8 +261,15 @@ async def fixtures_yesterday(db: SessionDep, tier: CallerTier):
     response_model=list[FixtureResponse],
     summary="Tomorrow's fixtures",
 )
-async def fixtures_tomorrow(db: SessionDep, tier: CallerTier):
-    return serialize_fixtures(_fixtures_on(db, current_window().tomorrow, tier), tier)
+async def fixtures_tomorrow(
+    db: SessionDep, response: Response, tier: CallerTier, account: CurrentAccount
+):
+    _report_quota(response, db, account, tier, current_window().today)
+    return serialize_fixtures(
+        _fixtures_on(db, current_window().tomorrow, tier),
+        tier,
+        unlocked_ids=unlocked_ids(db, account),
+    )
 
 
 @router.get(
@@ -238,9 +281,11 @@ async def fixtures_tomorrow(db: SessionDep, tier: CallerTier):
         "call, which is not the same as its best bet — see /fixtures/today/value-bets."
     ),
 )
-async def best_today(db: SessionDep, tier: CallerTier):
-    """Every tier gets this — "Match of the Day pick" is on the free column of
-    the pricing page. Free sees the pick at free depth."""
+async def best_today(db: SessionDep, response: Response, tier: CallerTier, account: CurrentAccount):
+    """Every tier gets this — "Match of the Day pick" is its own line on the
+    free column of the pricing page, listed beside the three daily predictions
+    rather than counted among them. So it is always revealed and never spends an
+    unlock; free simply sees it at free depth."""
     fixtures = _fixtures_on(db, current_window().today, tier)
     if not fixtures:
         raise HTTPException(
@@ -248,7 +293,8 @@ async def best_today(db: SessionDep, tier: CallerTier):
             detail="No fixtures cached for today.",
         )
     best = max(fixtures, key=lambda f: max(f.home_win_prob, f.away_win_prob))
-    return serialize_fixture(best, tier)
+    _report_quota(response, db, account, tier, current_window().today)
+    return serialize_fixture(best, tier, unlocked=True)
 
 
 @router.get(
@@ -274,6 +320,7 @@ async def value_bets_today(db: SessionDep, tier: CallerTier):
         )
         .order_by(StatPitchFixture.best_overall_kelly.desc())
     ).all()
+    # Pro and above only, so there is no allowance to consult.
     return serialize_fixtures(fixtures, tier)
 
 
@@ -282,7 +329,20 @@ async def value_bets_today(db: SessionDep, tier: CallerTier):
     response_model=FixtureResponse,
     summary="One cached fixture by primary key",
 )
-async def get_fixture(fixture_pk: int, db: SessionDep, tier: CallerTier):
+async def get_fixture(
+    fixture_pk: int,
+    db: SessionDep,
+    response: Response,
+    tier: CallerTier,
+    account: CurrentAccount,
+):
+    """Opening a fixture is what reveals its prediction, and what spends one of
+    a free account's three daily unlocks.
+
+    Running out is not an error: the fixture still comes back, with `locked`
+    true and no probabilities, so the page can render the upsell in place. A 402
+    here would blank a screen the reader was already looking at.
+    """
     fixture = db.get(StatPitchFixture, fixture_pk)
     # A competition this tier cannot see is reported as absent rather than as
     # forbidden. 403 would confirm the fixture exists, and which fixtures exist
@@ -292,7 +352,11 @@ async def get_fixture(fixture_pk: int, db: SessionDep, tier: CallerTier):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Fixture {fixture_pk} is not in the three-day cache.",
         )
-    return serialize_fixture(fixture, tier)
+
+    today = current_window().today
+    revealed = unlock(db, account, tier, fixture.fixture_id, today)
+    _report_quota(response, db, account, tier, today)
+    return serialize_fixture(fixture, tier, unlocked=revealed)
 
 
 # ==============================================================================

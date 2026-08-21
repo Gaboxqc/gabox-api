@@ -1,18 +1,27 @@
-"""Per-tier fixture shapes.
+"""Fixture shapes, by tier and by unlock.
 
-There are **two** shapes, not three. The pricing page gives Elite nothing Pro
-does not already have except API access, so inventing an Elite-only data tier
-here would be a rule the product does not actually sell.
+Three shapes, and the split is not purely by tier — the free tier has two of
+them, because its predictions are rationed:
 
-    free  ->  identity, teams, crests, kickoff, 1X2 probabilities, result
-    paid  ->  all of that, plus every market, price, edge and explanation
+    teaser  ->  identity, teams, crests, kickoff, result. No prediction.
+    free    ->  the teaser plus the model's 1X2 probabilities
+    full    ->  all of that, plus every market, price, edge and explanation
+
+A free account sees teasers until it spends one of its three daily unlocks; see
+`quota`. Anonymous visitors only ever see teasers, since there is no honest way
+to count three a day against somebody with no account.
+
+There is no Elite-only shape. The pricing page gives Elite nothing Pro does not
+already have except API access, so inventing one would be a rule the product
+does not sell — `test_pro_and_elite_receive_identical_shapes` keeps that honest.
 
 Gated fields are **absent**, never null. A `null` on `odds_over_2_5` is
 indistinguishable from "no market was offered", and a frontend would render it
 as missing data rather than as something worth paying for. Leaving the key out
-entirely is unambiguous, and `locked` says why.
+entirely is unambiguous; `locked` says why.
 """
 
+from collections.abc import Container
 from datetime import date, datetime
 from typing import Any
 
@@ -23,12 +32,13 @@ from api.statpitch.models import StatPitchFixture
 from api.statpitch.tiers import Feature, allows
 
 
-class FixtureFreeRead(SQLModel):
-    """What a free account sees: who is playing, when, and who is likely to win.
+class FixtureTeaserRead(SQLModel):
+    """A fixture with its prediction withheld.
 
-    Deliberately no bookmaker prices. "Market breakdown (Book vs ML)" is a paid
-    line, and a price is half of that comparison — showing odds here would give
-    away the more interesting half for nothing.
+    What an anonymous visitor sees, and what a free account sees once its three
+    daily unlocks are spent. Everything here is the part of the product that was
+    never for sale — who is playing, when, the crests, and the result once it is
+    in. The probabilities are the thing being rationed.
     """
 
     id: int
@@ -54,23 +64,33 @@ class FixtureFreeRead(SQLModel):
     model_version: str
     synced_at: datetime
 
-    home_win_prob: float
-    draw_prob: float
-    away_win_prob: float
-
     home_score: int | None
     away_score: int | None
     actual_result: str | None
 
-    # Tells the frontend it is looking at a reduced object, so an upsell can be
-    # rendered where the numbers would be rather than an empty state.
+    # Tells the frontend it is looking at a reduced object, so an upsell — or an
+    # "unlock this prediction" control — can be rendered where the numbers would
+    # be, rather than an empty state.
     locked: bool = True
+
+
+class FixtureFreeRead(FixtureTeaserRead):
+    """An unlocked fixture on the free tier: the teaser plus the model's call.
+
+    Deliberately no bookmaker prices. "Market breakdown (Book vs ML)" is a paid
+    line, and a price is half of that comparison — showing odds here would give
+    away the more interesting half for nothing.
+    """
+
+    locked: bool = False
+
+    home_win_prob: float
+    draw_prob: float
+    away_win_prob: float
 
 
 class FixtureFullRead(FixtureFreeRead):
     """Pro and Elite. Everything the model and the market have to say."""
-
-    locked: bool = False
 
     odds_coverage: bool
     fully_rated: bool
@@ -146,18 +166,50 @@ def sees_full_depth(tier: Tier) -> bool:
     return all(allows(tier, feature) for feature in _FULL_DEPTH)
 
 
-def serialize_fixture(fixture: StatPitchFixture, tier: Tier) -> FixtureFreeRead:
+def _shape_for(tier: Tier, unlocked: bool) -> type[FixtureTeaserRead]:
+    """Which model this caller gets for this fixture.
+
+    A paid tier is never rationed, so `unlocked` only decides anything on free.
+    """
+    if sees_full_depth(tier):
+        return FixtureFullRead
+    return FixtureFreeRead if unlocked else FixtureTeaserRead
+
+
+def serialize_fixture(
+    fixture: StatPitchFixture, tier: Tier, *, unlocked: bool = False
+) -> FixtureTeaserRead:
     """One fixture, shaped for the caller.
 
-    The return type is the free model because it is the common ancestor; the
-    paid shape is a subclass, so FastAPI serialises whichever it is actually
+    The return type is the teaser because it is the common ancestor; the richer
+    shapes are subclasses, so FastAPI serialises whichever it is actually
     handed.
     """
-    model = FixtureFullRead if sees_full_depth(tier) else FixtureFreeRead
-    return model.model_validate(fixture, from_attributes=True)
+    return _shape_for(tier, unlocked).model_validate(fixture, from_attributes=True)
 
 
-def serialize_fixtures(fixtures: list[StatPitchFixture], tier: Tier) -> list[FixtureFreeRead]:
-    """The list form, resolving the shape once rather than per fixture."""
-    model = FixtureFullRead if sees_full_depth(tier) else FixtureFreeRead
-    return [model.model_validate(fixture, from_attributes=True) for fixture in fixtures]
+def serialize_fixtures(
+    fixtures: list[StatPitchFixture],
+    tier: Tier,
+    *,
+    unlocked_ids: Container[str] | None = None,
+) -> list[FixtureTeaserRead]:
+    """The list form.
+
+    `unlocked_ids` is the set of fixtures this account has already revealed,
+    fetched once by the caller. Listing never *spends* an unlock — browsing what
+    is on today is not the thing being sold, and charging for it would make the
+    fixture list useless.
+    """
+    if sees_full_depth(tier):
+        return [
+            FixtureFullRead.model_validate(fixture, from_attributes=True) for fixture in fixtures
+        ]
+
+    already = unlocked_ids or ()
+    return [
+        _shape_for(tier, fixture.fixture_id in already).model_validate(
+            fixture, from_attributes=True
+        )
+        for fixture in fixtures
+    ]

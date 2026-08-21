@@ -176,7 +176,9 @@ def test_gated_fields_are_absent_rather_than_null(saved):
 
 
 def test_the_free_shape_still_carries_what_free_is_sold(saved):
-    payload = serialize_fixture(saved(home_team="Arsenal"), "free").model_dump()
+    """An *unlocked* free fixture. Locked ones are the teaser — see
+    `tests/test_statpitch_quota.py`."""
+    payload = serialize_fixture(saved(home_team="Arsenal"), "free", unlocked=True).model_dump()
 
     assert payload["home_team"] == "Arsenal"
     assert payload["home_win_prob"] is not None
@@ -184,11 +186,12 @@ def test_the_free_shape_still_carries_what_free_is_sold(saved):
     assert payload["away_win_prob"] is not None
     # Crests are a free-tier visual, so they must survive the trim.
     assert "home_crest_url" in payload
-    assert payload["locked"] is True
+    assert payload["locked"] is False
 
 
 @pytest.mark.parametrize("tier", ["pro", "elite"])
 def test_paid_tiers_get_the_full_shape(tier, saved):
+    """No `unlocked` argument: a paid tier is not rationed."""
     payload = serialize_fixture(saved(), tier).model_dump()
 
     for field in GATED_FIELDS:
@@ -207,8 +210,10 @@ def test_pro_and_elite_receive_identical_shapes(saved):
 
 def test_the_shape_classes_are_what_they_claim(saved):
     row = saved()
-    assert isinstance(serialize_fixture(row, "free"), FixtureFreeRead)
+    assert isinstance(serialize_fixture(row, "free", unlocked=True), FixtureFreeRead)
     assert isinstance(serialize_fixture(row, "pro"), FixtureFullRead)
+    # A paid tier is never rationed, so the flag changes nothing for it.
+    assert isinstance(serialize_fixture(row, "pro", unlocked=False), FixtureFullRead)
 
 
 # ── Over the wire ────────────────────────────────────────────────────────────
@@ -326,12 +331,17 @@ def test_the_paid_endpoints_admit_a_pro_caller(path, client, as_tier):
 
 
 def test_the_match_of_the_day_is_free(client, make_fixture, seed_fixtures):
-    """It is on the free column of the pricing page — at free depth."""
+    """Its own line on the free column, listed beside the three daily
+    predictions rather than counted among them — so it is always revealed."""
     seed_fixtures(make_fixture())
 
     response = client.get("/statpitch/fixtures/today/best")
     assert response.status_code == 200
-    assert response.json()["locked"] is True
+    body = response.json()
+    assert body["locked"] is False
+    assert body["home_win_prob"] is not None
+    # Free depth all the same: the pick, not the prices behind it.
+    assert "odds_home" not in body
 
 
 def test_the_settings_still_expose_the_free_league_set():
