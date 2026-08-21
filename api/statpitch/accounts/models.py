@@ -366,3 +366,30 @@ class AdminAccountUpdateRequest(SQLModel):
     """
 
     is_active: bool
+
+
+class TierGrantRequest(SQLModel):
+    """Move an account to a tier, with a reason.
+
+    `reason` is required rather than optional. It costs an admin a few words and
+    it is the only thing that makes the grant history worth keeping — "why is
+    this account Elite?" is a question the tier column can never answer.
+    """
+
+    tier: Tier
+    # Null means perpetual. Ignored entirely when granting `free`, which has
+    # nothing to expire.
+    expires_at: datetime | None = None
+    reason: str = Field(min_length=3, max_length=200)
+
+
+class TierGrantRead(SQLModel):
+    """One entry in an account's tier history."""
+
+    id: int
+    from_tier: str
+    to_tier: str
+    expires_at: datetime | None = None
+    reason: str
+    granted_by: str
+    granted_at: datetime

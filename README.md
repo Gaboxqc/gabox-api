@@ -259,6 +259,9 @@ they hold.
 | `POST` | `/statpitch/admin/accounts` | Creates one and returns a one-time password |
 | `PATCH` | `/statpitch/admin/accounts/{id}` | `{is_active}` — deactivate or restore |
 | `DELETE` | `/statpitch/admin/accounts/{id}` | Irreversible; cascades sessions, keys, unlocks |
+| `PATCH` | `/statpitch/admin/accounts/{id}/tier` | `{tier, expires_at, reason}` — grant, extend or revoke |
+| `GET` | `/statpitch/admin/accounts/{id}/grants` | Every tier this account has held, newest first |
+| `POST` | `/statpitch/admin/accounts/{id}/trial/reset` | Let them start the 14-day trial again |
 
 - **Both tiers are reported.** `tier` is what was granted, `effective_tier` is
   what the account has today. A lapsed Elite showing only `free` would look like
@@ -272,6 +275,18 @@ they hold.
   only checked against `is_active` when it is loaded.
 - **Prefer deactivating to deleting.** It stops access just as immediately, is
   reversible, and keeps the history a support conversation usually needs.
+- **Every tier change writes a row to `statpitch_tier_grant`** — from, to,
+  expiry, reason and who did it. The account column says what they have; this
+  says how they got it, which is the question the column can never answer.
+  `reason` is required for exactly that purpose.
+- **An expiry already in the past is refused** (422). It would work — the tier
+  would read `free` immediately — but nobody means that; it is a typo in a date,
+  and honouring it silently looks like the grant failed.
+- **Offset-aware expiries are folded to UTC on the way in.** A body carrying
+  `-06:00` would otherwise be stored tz-aware and raise on the first comparison.
+- **Resetting the trial is not a tier grant.** It restores the ability to
+  *start* the trial; somebody asking for a free month wants a grant, which is a
+  different call and leaves a different trail.
 - Writes are recorded by the existing audit middleware.
 
 ### Tiers
