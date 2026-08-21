@@ -229,10 +229,36 @@ What a caller sees is decided in one place, [api/statpitch/tiers.py](api/statpit
 | Settled ledger & ROI | — | ✅ | ✅ |
 | API access | — | — | ✅ |
 
-- **Depth is a response shape, not a 403.** Free callers get a smaller object
+- **Depth is a response shape, not a 403.** Locked callers get a smaller object
   with `locked: true`, so the frontend can render an upsell where the numbers
   would be. Gated fields are **absent, not null** — `null` is indistinguishable
   from "no market offered" and would render as broken data.
+
+#### The free tier's three a day
+
+There are three fixture shapes, because free predictions are rationed:
+
+| | teaser | free | full |
+|---|---|---|---|
+| Teams, crests, kickoff, result | ✅ | ✅ | ✅ |
+| 1X2 probabilities | — | ✅ | ✅ |
+| Markets, prices, edge, explanation | — | — | ✅ |
+
+- **Opening a fixture is what spends an unlock**, not listing them. Browsing what
+  is on today is not the thing being sold.
+- **Unlocks are permanent and idempotent.** Reopening a fixture costs nothing,
+  today or next week — otherwise refreshing a page costs a reader their
+  allowance. Only the day it was first spent counts against that day's three.
+- **Running out returns the teaser, not a 402.** A 402 would blank a screen the
+  reader was already looking at; `locked: true` lets the page render the upsell
+  in place.
+- **Anonymous visitors get nothing to unlock.** There is no honest way to count
+  three a day against somebody with no account — cookies clear, addresses rotate
+  — so signing up is what reveals the first prediction.
+- **Match of the Day never spends an unlock.** It is its own line on the pricing
+  page, beside the three rather than one of them.
+- Every fixture response carries `X-Predictions-Remaining`, either a count or
+  `unlimited`.
 - **`/stats`, `/ledger` and `/fixtures/today/value-bets` return 402** below Pro.
   Those are the exceptions: there is no partial track record worth returning.
 - **Elite adds API access and nothing else**, exactly as the pricing page says.
