@@ -42,10 +42,19 @@ MIN_CREST_SIMILARITY = 0.72
 # the registry holds the long form of the name.
 MIN_CREST_MARGIN = 0.08
 
-# The crest is served at 128 CSS pixels at most; ESPN's is 500. Two sizes are
-# stored so a fixture list can ask for the small one and a detail page the
-# large, rather than every list shipping 40 oversized PNGs.
-CREST_SIZES: tuple[int, ...] = (128, 64)
+# ESPN's source art is 500x500, and that is the real ceiling — the 1000px
+# "combiner" URL is only an upscale of the same pixels.
+#
+# 512 therefore never resamples: the cropped badge fits inside it untouched, so
+# the original crisp pixels survive and lossless WebP compresses flat logo art
+# down to ~14KB — smaller than a 256px *lossy* encode, and sharper than
+# anything. 128 stays for dense fixture lists, where forty 14KB files would be
+# 560KB of badges nobody is looking closely at.
+CREST_SIZES: tuple[int, ...] = (512, 128)
+
+# Which size a `crest_url` points at. The other sizes are reachable by swapping
+# the suffix, because every size of a club shares one hash — see `crest_key`.
+DEFAULT_CREST_SIZE = 128
 
 
 @dataclass(frozen=True)
@@ -223,6 +232,12 @@ def describe_failure(name: str, candidates: list[EspnTeam]) -> str:
 def normalise_crest(raw: bytes, size: int) -> bytes:
     """Square WebP of `size` pixels, transparency preserved.
 
+    Encoded losslessly when the badge fits without resampling, and lossily when
+    it had to be shrunk. That is not a preference, it is what the two cases
+    actually cost: untouched flat-colour art compresses losslessly to less than
+    a lossy encode of the same thing, while a LANCZOS downscale introduces
+    anti-aliased gradients that lossless spends enormous space on.
+
     Re-encoding is also the sanitiser. Whatever arrives is decoded to pixels and
     written back out, which discards EXIF, colour profiles, trailing data and
     anything polyglot — so a file that is both a valid PNG and a valid script
@@ -246,13 +261,32 @@ def normalise_crest(raw: bytes, size: int) -> bytes:
         if bounds:
             image = image.crop(bounds)
 
+        # `thumbnail` only ever shrinks, so a badge smaller than the target is
+        # left exactly as it is — which is the case worth detecting.
+        before = image.size
         image.thumbnail((size, size), Image.LANCZOS)
+        resampled = image.size != before
 
         # Centre on a square transparent canvas: a wide badge and a tall one
         # must both occupy the same box, or a fixture list will not line up.
         canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         canvas.paste(image, ((size - image.width) // 2, (size - image.height) // 2))
 
-        buffer = io.BytesIO()
-        canvas.save(buffer, format="WEBP", quality=90, method=6)
-        return buffer.getvalue()
+        if resampled:
+            # A LANCZOS downscale leaves anti-aliased gradients that lossless
+            # spends enormous space on, so there is nothing to weigh up.
+            buffer = io.BytesIO()
+            canvas.save(buffer, format="WEBP", quality=90, method=6)
+            return buffer.getvalue()
+
+        # Untouched art is usually flat colour, where lossless is both perfect
+        # and smaller. Usually, not always: a badge with a photographic crest or
+        # a gradient can cost several times its lossy encode. Rather than guess
+        # from the artwork, encode both and keep the smaller — the comparison is
+        # exact and costs a few milliseconds once, in a script.
+        candidates = []
+        for options in ({"lossless": True, "method": 6}, {"quality": 95, "method": 6}):
+            buffer = io.BytesIO()
+            canvas.save(buffer, format="WEBP", **options)
+            candidates.append(buffer.getvalue())
+        return min(candidates, key=len)

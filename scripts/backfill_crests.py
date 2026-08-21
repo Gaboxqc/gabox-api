@@ -38,6 +38,7 @@ from sqlmodel import Session, select
 from api.core.database import engine
 from api.statpitch.crests import (
     CREST_SIZES,
+    DEFAULT_CREST_SIZE,
     EspnTeam,
     describe_failure,
     fetch_espn_teams,
@@ -119,13 +120,18 @@ async def _download(client: httpx.AsyncClient, url: str) -> bytes | None:
 
 
 async def _store_crest(
-    client: httpx.AsyncClient, team: StatPitchTeam, source_url: str, *, dry_run: bool
+    client: httpx.AsyncClient,
+    team: StatPitchTeam,
+    source_url: str,
+    *,
+    dry_run: bool,
+    force: bool = False,
 ) -> tuple[str | None, str | None, bool]:
     """Fetch, normalise and upload. Returns `(url, key, uploaded_anything)`.
 
-    The largest size is the one recorded on the team row; the smaller variants
-    are uploaded alongside it so a fixture list can ask for the 64px file rather
-    than shipping forty 500px PNGs.
+    Every size is keyed on a hash of the *source*, so they share one name and
+    differ only in the suffix — a caller holding any of them can reach the
+    others. `DEFAULT_CREST_SIZE` is what gets recorded on the team row.
     """
     raw = await _download(client, source_url)
     if raw is None:
@@ -137,15 +143,15 @@ async def _store_crest(
 
     for size in CREST_SIZES:
         payload = normalise_crest(raw, size)
-        key = crest_key(team.slug, payload, size)
+        key = crest_key(team.slug, raw, size)
 
         if dry_run:
             url = f"(dry-run) {key}"
         else:
-            url, created = put_crest(key, payload)
+            url, created = put_crest(key, payload, force=force)
             uploaded = uploaded or created
 
-        if size == max(CREST_SIZES):
+        if size == DEFAULT_CREST_SIZE:
             primary_url, primary_key = url, key
 
     return primary_url, primary_key, uploaded
@@ -192,7 +198,9 @@ async def run(only: str | None, refresh: bool, dry_run: bool) -> Report:
                     print(f"  --   {team.display_name:32} matched, no badge")
                     continue
 
-                url, key, uploaded = await _store_crest(client, team, source_url, dry_run=dry_run)
+                url, key, uploaded = await _store_crest(
+                    client, team, source_url, dry_run=dry_run, force=refresh
+                )
                 if url is None:
                     report.unresolved.append(f"{team.display_name}: download failed")
                     continue

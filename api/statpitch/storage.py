@@ -102,11 +102,21 @@ def key_slug(slug: str) -> str:
     return _UNSAFE_IN_A_KEY.sub("-", slug.strip().lower()).strip("-")
 
 
-def crest_key(slug: str, payload: bytes, size: int) -> str:
+def crest_key(slug: str, source: bytes, size: int) -> str:
     """Where a crest lives.
 
     Deterministic in the bytes, so re-running the backfill on unchanged images
     produces the same key and uploads nothing.
+
+    The hash is of the *source* image, not of the encoded variant, so every size
+    of one club shares it:
+
+        .../arsenal/6c5549aba32b6d17-512.webp
+        .../arsenal/6c5549aba32b6d17-128.webp
+
+    which lets a caller reach any size by swapping the suffix. Hashing each
+    variant separately gave every size an unrelated name, so the small one was
+    uploaded and then unreachable by anything holding the large one's URL.
 
     The prefix comes from `r2_crest_prefix` because the bucket is shared with
     other projects. There are no real folders in object storage — a prefix is
@@ -114,7 +124,7 @@ def crest_key(slug: str, payload: bytes, size: int) -> str:
     that keeps crests out of everything else's way.
     """
     prefix = settings.r2_crest_prefix.strip("/")
-    stem = f"{key_slug(slug)}/{content_hash(payload)}-{size}.webp"
+    stem = f"{key_slug(slug)}/{content_hash(source)}-{size}.webp"
     return f"{prefix}/{stem}" if prefix else stem
 
 
@@ -139,17 +149,20 @@ def object_exists(key: str) -> bool:
         raise
 
 
-def put_crest(key: str, payload: bytes) -> tuple[str, bool]:
+def put_crest(key: str, payload: bytes, *, force: bool = False) -> tuple[str, bool]:
     """Upload one crest. Returns `(public_url, uploaded)`.
 
-    `uploaded` is False when the object was already there. Because the key
-    contains the content hash, "already there" means "identical bytes", which is
-    what makes the whole backfill safe to re-run — and what lets the report say
-    how much actually changed.
+    `uploaded` is False when the object was already there, which is what makes
+    the backfill safe to re-run and lets the report say how much changed.
+
+    `force` exists because the key names the *source* image, not the encoded
+    bytes. That is what makes the sizes derivable from one another, but it also
+    means improving the encoder produces the same key — so the existence check
+    would quietly keep the old, worse bytes forever. `--refresh` sets this.
     """
     client = _client()
 
-    if object_exists(key):
+    if not force and object_exists(key):
         log.debug("Crest already stored at %s", key)
         return public_url(key), False
 

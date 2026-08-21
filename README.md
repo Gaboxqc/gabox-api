@@ -379,10 +379,22 @@ Needs the optional extra (`pip install -e ".[crests]"`) and R2 credentials.
 - **Keys contain a hash of the image**, written `immutable` with a one-year TTL.
   A changed crest is a new key plus a column update — no purge to forget, no
   window serving something stale, and rollback is a column update too. Re-running
-  the backfill on unchanged images uploads nothing.
-- **Images are normalised to square WebP at 128 and 64px.** A real crest goes
-  from 43 KB PNG to 8.5 KB. Re-encoding is also the sanitiser: whatever arrives is
-  decoded to pixels and written back out.
+  the backfill on unchanged images uploads nothing — pass `--refresh` to
+  overwrite, which is what you want after changing the encoder, since the key
+  names the source rather than the encoded bytes.
+- **Two sizes, and every size of a club shares one key.** `crest_url` points at
+  the 128px file (~7 KB, for fixture lists); swap `-128.webp` for `-512.webp` to
+  get the native-resolution copy (~25 KB, for detail views and high-DPI screens).
+  The hash names the *source*, which is what makes that swap work.
+- **512 is the real ceiling.** ESPN's art is 500×500 and its 1000px URL is only
+  an upscale of the same pixels. At 512 the badge is never resampled, so the
+  original stays pixel-perfect; smaller sizes are a LANCZOS downscale.
+- **The encoder is chosen by measurement, not preference.** Downscaled art gets
+  a lossy encode, since anti-aliased gradients cost lossless enormous space.
+  Native-size art is encoded both ways and the smaller file wins — flat badges
+  come out lossless and perfect, gradient-heavy ones come out lossy.
+- Re-encoding is also the sanitiser: whatever arrives is decoded to pixels and
+  written back out.
 - **An unresolved crest is a normal outcome.** Matching one club name has no
   opponent to break ties, so a winner must also clear the runner-up by a margin —
   "RCD Espanyol de Barcelona" scores 0.90 against both Espanyol *and* Barcelona,
