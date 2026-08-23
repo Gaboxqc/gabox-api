@@ -19,7 +19,9 @@ from api.core.security import validate_api_key
 from api.statpitch.accounts.deps import CallerTier, CurrentAccount
 from api.statpitch.client import StatPitchError, StatPitchRefusal
 from api.statpitch.clock import current_window
+from api.statpitch.competitions import all_competitions
 from api.statpitch.models import (
+    CompetitionRead,
     SettledBetRead,
     StatPitchFixture,
     StatPitchSettledBet,
@@ -164,6 +166,30 @@ async def sync(db: SessionDep):
 # ==============================================================================
 # FIXTURES
 # ==============================================================================
+
+
+@router.get(
+    "/competitions",
+    response_model=list[CompetitionRead],
+    summary="Every competition, with its icon",
+    description=(
+        "Ungated on purpose: which competitions exist is navigation, not "
+        "product. `free_tier` says which of them a free account can actually "
+        "see, so the rest can be shown as an upgrade rather than silently "
+        "returning nothing."
+    ),
+)
+async def list_competitions(db: SessionDep):
+    return [
+        CompetitionRead(
+            competition_id=row.competition_id,
+            name=row.name,
+            short_name=row.short_name,
+            icon_url=row.icon_url,
+            free_tier=row.competition_id in visible_competitions("free"),
+        )
+        for row in all_competitions(db)
+    ]
 
 
 @router.get(

@@ -54,6 +54,11 @@ class FixtureTeaserRead(SQLModel):
     commence_time: datetime | None
     date_confirmed: bool
 
+    # Read through the registry, so a name or an icon exists in one place only.
+    competition_name: str
+    competition_short_name: str
+    competition_icon_url: str | None
+
     home_team: str
     away_team: str
     neutral_venue: bool

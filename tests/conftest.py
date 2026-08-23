@@ -28,6 +28,7 @@ import api.portfolio.models  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.accounts  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.accounts.keys  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.admin.grants  # noqa: F401,E402  registers tables on the metadata
+import api.statpitch.competitions  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.models  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.motd  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.quota  # noqa: F401,E402  registers tables on the metadata
@@ -169,6 +170,7 @@ def make_fixture_factory(engine):
     from sqlmodel import Session
 
     from api.statpitch.clock import today_local
+    from api.statpitch.competitions import seed as seed_competitions
     from api.statpitch.models import StatPitchFixture
     from api.statpitch.teams import resolve_team
 
@@ -202,6 +204,9 @@ def make_fixture_factory(engine):
         competition = overrides.get("competition_id", defaults["competition_id"])
 
         with Session(engine) as db:
+            # The registry has to hold the competition before a fixture can
+            # reference it, which is the same order the app boots in.
+            seed_competitions(db)
             defaults["home_team_id"] = resolve_team(db, home, competition).id
             defaults["away_team_id"] = resolve_team(db, away, competition).id
 
