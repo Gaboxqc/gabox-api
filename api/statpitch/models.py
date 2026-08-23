@@ -22,6 +22,7 @@ from sqlalchemy.types import JSON
 from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle, resolved at runtime
+    from api.statpitch.competitions import StatPitchCompetition
     from api.statpitch.teams import StatPitchTeam
 
 # ==============================================================================
@@ -203,7 +204,13 @@ class StatPitchFixture(SQLModel, table=True):
 
     # ── Identity ──────────────────────────────────────────────────────────────
     fixture_id: str = Field(index=True)
-    competition_id: str = Field(index=True)
+    # References the registry by its natural key. `competition_id` is already
+    # stable and already what every filter matches on, so pointing the key at it
+    # normalises the name and icon away without renaming a column or touching a
+    # single query.
+    competition_id: str = Field(
+        foreign_key="statpitch_competition.competition_id", index=True, max_length=64
+    )
     season: str | None = Field(default=None)
     stage: str | None = Field(default=None)
     format: str | None = Field(default=None)
@@ -343,6 +350,31 @@ class StatPitchFixture(SQLModel, table=True):
             "lazy": "joined",
         }
     )
+
+    # Joined for the same reason the clubs are: every read of a fixture wants
+    # the competition's name, and one query is better than one per row.
+    competition: "StatPitchCompetition" = Relationship(
+        sa_relationship_kwargs={
+            "primaryjoin": (
+                "StatPitchFixture.competition_id == StatPitchCompetition.competition_id"
+            ),
+            "foreign_keys": "StatPitchFixture.competition_id",
+            "lazy": "joined",
+            "viewonly": True,
+        }
+    )
+
+    @property
+    def competition_name(self) -> str:
+        return self.competition.name
+
+    @property
+    def competition_short_name(self) -> str:
+        return self.competition.short_name
+
+    @property
+    def competition_icon_url(self) -> str | None:
+        return self.competition.icon_url
 
     @property
     def home_team(self) -> str:
@@ -538,6 +570,21 @@ class FixtureRead(SQLModel):
     actual_result: str | None
 
 
+class CompetitionRead(SQLModel):
+    """One competition, for filter chips and headings.
+
+    Public and ungated: which competitions exist is navigation, not product.
+    """
+
+    competition_id: str
+    name: str
+    short_name: str
+    icon_url: str | None = None
+    # Whether the free tier can see it, so the frontend can mark the seven cups
+    # as an upgrade rather than discovering it by getting an empty list back.
+    free_tier: bool = False
+
+
 class SettledBetRead(SQLModel):
     id: int
     fixture_id: str
@@ -629,4 +676,5 @@ class SyncResultRead(SQLModel):
 #
 # Without it the mapper fails only for callers that happen to import this module
 # alone — which the app never does and a script always does.
+from api.statpitch.competitions import StatPitchCompetition  # noqa: E402,F401
 from api.statpitch.teams import StatPitchTeam  # noqa: E402,F401  (see above)

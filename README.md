@@ -172,6 +172,7 @@ Each of the three resources above carries per-language content:
 |---|---|---|
 | `POST` | `/statpitch/sync` | 🔒 The full daily pass. Idempotent |
 | `GET` | `/statpitch/fixtures` | The three-day window. Filter by `day`, `competition_id`, `value_bets_only` |
+| `GET` | `/statpitch/competitions` | All twelve, with names and icons. Ungated |
 | `GET` | `/statpitch/fixtures/window` | The three local dates currently cached |
 | `GET` | `/statpitch/fixtures/yesterday` \| `/today` \| `/tomorrow` | |
 | `GET` | `/statpitch/fixtures/today/best` | Match of the Day — picked once by the day's first sync |
@@ -405,6 +406,26 @@ matches, and a screenshot was wrong by dinner.
   and entitlement are separate questions.
 - **An unrecognised tier resolves to free**, so a typo in a manual grant fails
   closed.
+
+### Competitions
+
+`competition_id` used to be a bare string in four tables with nothing behind it —
+the API returned `"ENG.PL"` and no readable name at all. `statpitch_competition`
+is that table, and the four now hold a real foreign key.
+
+- **Keyed on the natural key.** `competition_id` is already stable, already
+  unique and already what every filter matches on, so the keys point straight at
+  it — normalised without renaming a column or rewriting a query.
+- `GET /statpitch/competitions` returns all twelve with `name`, `short_name` and
+  `icon_url`, plus `free_tier` so the seven cups can be shown as an upgrade
+  rather than discovered by getting an empty list back. Ungated: which
+  competitions exist is navigation, not product.
+- Fixtures carry `competition_name`, `competition_short_name` and
+  `competition_icon_url`, read through the reference and joined with the clubs,
+  so a fixture list is still one query.
+- **`statpitch_team.competition_id` deliberately has no constraint.** It records
+  the first competition a club was *seen* in — a note about history, not a
+  reference — and a club can turn up in a cup that is not tracked.
 
 ### Club crests
 

@@ -85,3 +85,25 @@ ALL_COMPETITIONS: frozenset[str] = frozenset(
 
 def sport_key_for(competition_id: str) -> str | None:
     return COMPETITION_SPORT_KEYS.get(competition_id)
+
+
+# How each competition is named, as ESPN names it. `(name, short_name)`.
+#
+# The long form is what a page heading wants; the short form is what fits in a
+# filter chip beside a crest. Both are taken from ESPN rather than invented, so
+# they agree with the icons that come from the same place — and so nobody has to
+# decide whether it is "LaLiga", "La Liga" or "LALIGA".
+COMPETITION_NAMES: dict[str, tuple[str, str]] = {
+    "ENG.PL": ("English Premier League", "Premier League"),
+    "ESP.LALIGA": ("Spanish LALIGA", "LALIGA"),
+    "GER.BUNDESLIGA": ("German Bundesliga", "Bundesliga"),
+    "ITA.SERIEA": ("Italian Serie A", "Serie A"),
+    "FRA.LIGUE1": ("French Ligue 1", "Ligue 1"),
+    "ENG.FA_CUP": ("English FA Cup", "FA Cup"),
+    "ESP.COPA_DEL_REY": ("Spanish Copa del Rey", "Copa del Rey"),
+    "GER.DFB_POKAL": ("German Cup", "DFB-Pokal"),
+    "ITA.COPPA_ITALIA": ("Coppa Italia", "Coppa Italia"),
+    "FRA.COUPE_DE_FRANCE": ("Coupe de France", "Coupe de France"),
+    "UEFA.UCL": ("UEFA Champions League", "Champions League"),
+    "UEFA.UEL": ("UEFA Europa League", "Europa League"),
+}

@@ -76,7 +76,7 @@ def upgrade() -> None:
                         "slug": slug,
                         "name": name,
                         "competition": fixture.competition_id,
-                        "created": datetime.now(UTC).replace(tzinfo=None),
+                        "created": datetime.now(UTC).replace(tzinfo=None).isoformat(sep=" "),
                     },
                 )
                 teams[slug] = connection.execute(

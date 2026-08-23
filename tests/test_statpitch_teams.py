@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 from sqlmodel import Session, select
 
+from api.statpitch.competitions import seed as seed_competitions
 from api.statpitch.models import StatPitchFixture
 from api.statpitch.teams import (
     StatPitchTeam,
@@ -158,6 +159,7 @@ def test_a_fixture_reads_its_clubs_through_the_reference(engine):
     """The names are not copied onto the row any more — they are read back."""
     with Session(engine) as db:
         fixture = _fixture()
+        seed_competitions(db)
         link_fixtures(db, [(fixture, "Arsenal", "Chelsea")])
         db.add(fixture)
         db.commit()
@@ -173,6 +175,7 @@ def test_a_crest_reaches_a_fixture_immediately(engine):
     the next sync overwrote the column."""
     with Session(engine) as db:
         fixture = _fixture()
+        seed_competitions(db)
         link_fixtures(db, [(fixture, "Arsenal", "Chelsea")])
         db.add(fixture)
         db.commit()
@@ -199,6 +202,7 @@ def test_the_registry_survives_a_fixture_being_pruned(engine):
     with the cache is exactly what this table exists to prevent."""
     with Session(engine) as db:
         fixture = _fixture()
+        seed_competitions(db)
         link_fixtures(db, [(fixture, "Arsenal", "Chelsea")])
         db.add(fixture)
         db.commit()
