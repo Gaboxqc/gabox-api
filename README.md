@@ -199,7 +199,8 @@ administrative access.
 | `GET` | `/statpitch/accounts/me` | Email, effective tier, expiry. The frontend's source of truth |
 | `POST` | `/statpitch/accounts/password` | 🔑 Closes every other session and hands back a fresh one |
 | `POST` | `/statpitch/accounts/sessions/revoke-all` | 🔑 Sign out everywhere, here included |
-| `POST` | `/statpitch/accounts/trial` | 🔑 Starts the 14-day Pro trial. Once per account, ever |
+| `POST` | `/statpitch/accounts/trial/request` | 🔑 Ask for the 14-day Pro trial. Grants nothing |
+| `GET` | `/statpitch/accounts/trial/request` | 🔑 Where their most recent request stands |
 | `POST` | `/statpitch/accounts/keys` | 🔑 Issue an API key (Elite). The only response carrying the secret |
 | `GET` | `/statpitch/accounts/keys` | 🔑 List keys — prefix, name, last used, revoked |
 | `DELETE` | `/statpitch/accounts/keys/{id}` | 🔑 Revoke a key |
@@ -214,9 +215,16 @@ methods, taken from the `csrf_token` in any account response body.
   hours, because someone checking predictions on match day should not be made to
   sign in again. Safe because the tier is re-read from the database on every
   request, so a long session never means a stale entitlement.
-- **The trial needs no payment provider** — it is Pro with an end date.
-  `trial_used_at` is never cleared, so a second trial has to be a deliberate
-  manual grant rather than a side effect of cancelling.
+- **The trial is requested, not taken.** A customer opens a request and an admin
+  approves or declines it — there is no self-serve route, so no paid tier can be
+  granted by the person receiving it. Approving goes through the same `grant()`
+  as any other tier change, so a trial appears in the account's grant history
+  rather than in a ledger only this feature can read.
+- **Declining costs the customer nothing.** `trial_used_at` stays clear and they
+  can ask again; being told no once is not the same as having had the trial.
+  Approving stamps it, and only an admin reset can undo that.
+- **A decided request is never re-decided** (409). Overwriting `decided_by` and
+  `decided_at` would erase the part worth keeping.
 - **Registration is throttled on the same counter as login**, per address and per
   IP. Without that, an endpoint that runs an argon2 hash per request is a cheap
   way to burn the function's CPU budget.
@@ -263,6 +271,9 @@ they hold.
 | `PATCH` | `/statpitch/admin/accounts/{id}/tier` | `{tier, expires_at, reason}` — grant, extend or revoke |
 | `GET` | `/statpitch/admin/accounts/{id}/grants` | Every tier this account has held, newest first |
 | `POST` | `/statpitch/admin/accounts/{id}/trial/reset` | Let them start the 14-day trial again |
+| `GET` | `/statpitch/admin/trial-requests` | The queue, oldest first. `?status=pending\|approved\|declined\|all` |
+| `POST` | `/statpitch/admin/trial-requests/{id}/approve` | Grants Pro for 14 days |
+| `POST` | `/statpitch/admin/trial-requests/{id}/decline` | Grants nothing; they may ask again |
 | `GET` | `/statpitch/admin/accounts/{id}/sessions` | Every session, live or closed, with IP and user agent |
 | `POST` | `/statpitch/admin/accounts/{id}/sessions/revoke-all` | Sign them out everywhere; account stays usable |
 | `GET` | `/statpitch/admin/accounts/{id}/keys` | Their API keys — never the key itself |

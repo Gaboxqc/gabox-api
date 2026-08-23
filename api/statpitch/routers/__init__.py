@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from api.statpitch.accounts.router import router as accounts_router
-from api.statpitch.admin import admin_router
+from api.statpitch.admin.router import router as admin_router
 
 from .fixtures import router as fixtures_router
 

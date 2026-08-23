@@ -6,7 +6,6 @@ grants nothing except a tier, and the weakest tier is the default.
 """
 
 import logging
-from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlmodel import select
@@ -30,7 +29,8 @@ from api.statpitch.accounts.models import (
     PasswordChangeRequest,
     RegisterRequest,
     StatPitchAccount,
-    utcnow,
+    TrialRequestCreate,
+    TrialRequestRead,
 )
 from api.statpitch.accounts.sessions import (
     clear_failures,
@@ -42,6 +42,9 @@ from api.statpitch.accounts.sessions import (
     revoke_session,
 )
 from api.statpitch.tiers import Feature, allows
+from api.statpitch.trials import latest_for as latest_trial_request
+from api.statpitch.trials import open_request as open_trial_request
+from api.statpitch.trials import pending_for as pending_trial_request
 
 log = logging.getLogger("statpitch.accounts")
 
@@ -319,18 +322,23 @@ async def revoke_all(response: Response, db: SessionDep, account: RequiredAccoun
 
 
 @router.post(
-    "/trial",
-    response_model=AccountRead,
-    operation_id="statpitch_start_trial",
-    summary="Start the 14-day Pro trial",
+    "/trial/request",
+    response_model=TrialRequestRead,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="statpitch_request_trial",
+    summary="Ask for the 14-day Pro trial",
 )
-async def start_trial(db: SessionDep, session: AccountSessionDep):
-    """No card, no billing provider — a trial is just a Pro tier with an end
-    date, which `effective_tier` already knows how to let lapse.
+async def request_trial(
+    payload: TrialRequestCreate,
+    db: SessionDep,
+    session: AccountSessionDep,
+):
+    """Asks. It does not grant.
 
-    `trial_used_at` is what makes it once-only, and it is never cleared: a
-    second trial has to be a deliberate manual grant, not a side effect of
-    cancelling.
+    The trial used to be self-serve — press the button, have it. It is now
+    reviewed, so this records a request and an admin decides. Nothing about the
+    account changes here; approving is what moves the tier, and it does so
+    through the same path every other grant uses.
     """
     account = session.account
 
@@ -344,19 +352,29 @@ async def start_trial(db: SessionDep, session: AccountSessionDep):
             status_code=status.HTTP_409_CONFLICT,
             detail="This account already has a paid tier.",
         )
+    if pending_trial_request(db, account.id) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A trial request is already awaiting review.",
+        )
 
-    now = utcnow()
-    account.tier = "pro"
-    account.tier_source = "trial"
-    account.tier_expires_at = now + timedelta(days=14)
-    account.tier_updated_at = now
-    account.trial_used_at = now
-    db.add(account)
-    db.commit()
-    db.refresh(account)
+    return open_trial_request(db, account, payload.message)
 
-    log.info("StatPitch account %s started the Pro trial", account.id)
-    return AccountRead.of(account, session.csrf_token)
+
+@router.get(
+    "/trial/request",
+    response_model=TrialRequestRead | None,
+    operation_id="statpitch_my_trial_request",
+    summary="The state of this account's most recent trial request",
+)
+async def my_trial_request(db: SessionDep, session: AccountSessionDep):
+    """Null when they have never asked.
+
+    What the frontend needs to choose between "Request a trial", "Awaiting
+    review" and "Your request was declined" — rather than guessing from the
+    tier, which says nothing about a request still in the queue.
+    """
+    return latest_trial_request(db, session.account_id)
 
 
 # ==============================================================================

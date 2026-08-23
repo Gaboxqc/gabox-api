@@ -34,15 +34,18 @@ from api.statpitch.accounts.models import (
     AdminAccountRead,
     AdminAccountUpdateRequest,
     AdminSessionRead,
+    AdminTrialRequestRead,
     ApiKeyRead,
     StatPitchAccount,
     StatPitchAccountSession,
     TierGrantRead,
     TierGrantRequest,
+    TrialDecision,
     utcnow,
 )
 from api.statpitch.accounts.sessions import revoke_all_sessions
 from api.statpitch.admin.grants import as_naive_utc, grant, history
+from api.statpitch.trials import StatPitchTrialRequest, approve, decline, queue
 
 log = logging.getLogger("statpitch.admin")
 
@@ -475,3 +478,124 @@ async def revoke_account_key(key_id: int, db: SessionDep, principal: AdminDep):
     if key.revoked_at is None:
         revoke_key(db, key)
         log.warning("Admin %s revoked API key %s", principal.username, key.prefix)
+
+
+# ==============================================================================
+# TRIAL REQUESTS
+# ==============================================================================
+
+
+def _request_read(db: SessionDep, request: StatPitchTrialRequest) -> AdminTrialRequestRead:
+    account = db.get(StatPitchAccount, request.account_id)
+    return AdminTrialRequestRead(
+        id=request.id,
+        account_id=request.account_id,
+        account_email=account.email if account else "(deleted)",
+        status=request.status,
+        message=request.message,
+        requested_at=request.requested_at,
+        decided_at=request.decided_at,
+        decided_by=request.decided_by,
+        decision_reason=request.decision_reason,
+    )
+
+
+def _open_request_or_404(db: SessionDep, request_id: int) -> StatPitchTrialRequest:
+    request = db.get(StatPitchTrialRequest, request_id)
+    if request is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No trial request with id {request_id}.",
+        )
+    if request.status != "pending":
+        # Already decided. Deciding again would overwrite who decided it and
+        # when, which is the part worth keeping.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"That request was already {request.status}.",
+        )
+    return request
+
+
+@router.get(
+    "/trial-requests",
+    response_model=list[AdminTrialRequestRead],
+    operation_id="statpitch_admin_trial_requests",
+    summary="Trial requests awaiting a decision",
+)
+async def list_trial_requests(
+    db: SessionDep,
+    _: AdminDep,
+    status_filter: str | None = Query(
+        default="pending", alias="status", description="pending, approved, declined, or all"
+    ),
+):
+    """Oldest first: it is a queue, and whoever has waited longest goes first."""
+    wanted = None if status_filter in {None, "all"} else status_filter
+    return [_request_read(db, request) for request in queue(db, wanted)]
+
+
+@router.post(
+    "/trial-requests/{request_id}/approve",
+    response_model=AdminTrialRequestRead,
+    operation_id="statpitch_admin_approve_trial",
+    summary="Approve a trial request and grant Pro for 14 days",
+)
+async def approve_trial_request(
+    request_id: int,
+    payload: TrialDecision,
+    db: SessionDep,
+    principal: AdminDep,
+):
+    """Grants through the same path as any other tier change, so the trial shows
+    up in the account's grant history rather than in a ledger only this feature
+    knows how to read."""
+    request = _open_request_or_404(db, request_id)
+
+    account = db.get(StatPitchAccount, request.account_id)
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="The account that asked no longer exists.",
+        )
+    if account.trial_used_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That account has already used its trial.",
+        )
+
+    approved = approve(
+        db,
+        request,
+        account,
+        decided_by=principal.username or "api_key",
+        reason=payload.reason,
+    )
+    return _request_read(db, approved)
+
+
+@router.post(
+    "/trial-requests/{request_id}/decline",
+    response_model=AdminTrialRequestRead,
+    operation_id="statpitch_admin_decline_trial",
+    summary="Turn down a trial request",
+)
+async def decline_trial_request(
+    request_id: int,
+    payload: TrialDecision,
+    db: SessionDep,
+    principal: AdminDep,
+):
+    """Declining touches nothing on the account.
+
+    `trial_used_at` stays clear, so they can ask again — being told no once is
+    not the same as having had the trial.
+    """
+    request = _open_request_or_404(db, request_id)
+    declined = decline(
+        db,
+        request,
+        decided_by=principal.username or "api_key",
+        reason=payload.reason,
+    )
+    return _request_read(db, declined)
