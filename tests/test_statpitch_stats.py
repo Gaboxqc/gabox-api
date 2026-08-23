@@ -6,17 +6,28 @@ import pytest
 from sqlmodel import Session
 
 from api.statpitch.clock import today_local
+from api.statpitch.competitions import seed as seed_competitions
 from api.statpitch.models import StatPitchSettledBet
 from api.statpitch.stats import MONTH_DAYS, WEEK_DAYS, roi_for, window_start
+from api.statpitch.teams import resolve_team
 
 
-def _bet(days_ago: int, *, won: bool, odds: float = 2.0, basis: str = "1x2", n: int = 0):
+def _bet(db, days_ago: int, *, won: bool, odds: float = 2.0, basis: str = "1x2", n: int = 0):
+    """A settled bet, with its clubs and competition registered.
+
+    The ledger references both now rather than quoting their names, so the rows
+    they point at have to exist — the same order the settlement writes in.
+    """
+    seed_competitions(db)
+    home = resolve_team(db, "Home", "ESP.LALIGA")
+    away = resolve_team(db, "Away", "ESP.LALIGA")
+
     match_date = today_local() - timedelta(days=days_ago)
     return StatPitchSettledBet(
         fixture_id=f"ESP.LALIGA|2026-2027|H{days_ago}-{basis}-{n}|A{days_ago}-{basis}-{n}",
         competition_id="ESP.LALIGA",
-        home_team="Home",
-        away_team="Away",
+        home_team_id=home.id,
+        away_team_id=away.id,
         match_date=match_date,
         settled_at=datetime.now(UTC),
         basis=basis,
@@ -50,8 +61,8 @@ class TestRoi:
 
     def test_break_even_at_evens(self, engine):
         with Session(engine) as db:
-            db.add(_bet(1, won=True, n=1))
-            db.add(_bet(2, won=False, n=2))
+            db.add(_bet(db, 1, won=True, n=1))
+            db.add(_bet(db, 2, won=False, n=2))
             db.commit()
             result = roi_for(db, "1x2", WEEK_DAYS)
 
@@ -63,8 +74,8 @@ class TestRoi:
 
     def test_profitable_run(self, engine):
         with Session(engine) as db:
-            db.add(_bet(1, won=True, odds=3.0, n=1))
-            db.add(_bet(2, won=False, odds=3.0, n=2))
+            db.add(_bet(db, 1, won=True, odds=3.0, n=1))
+            db.add(_bet(db, 2, won=False, odds=3.0, n=2))
             db.commit()
             result = roi_for(db, "1x2", WEEK_DAYS)
 
@@ -75,8 +86,8 @@ class TestRoi:
 
     def test_week_window_excludes_older_bets(self, engine):
         with Session(engine) as db:
-            db.add(_bet(2, won=True, n=1))
-            db.add(_bet(20, won=True, n=2))
+            db.add(_bet(db, 2, won=True, n=1))
+            db.add(_bet(db, 20, won=True, n=2))
             db.commit()
 
             week = roi_for(db, "1x2", WEEK_DAYS)
@@ -87,14 +98,14 @@ class TestRoi:
 
     def test_beyond_the_month_window_is_excluded(self, engine):
         with Session(engine) as db:
-            db.add(_bet(45, won=True, n=1))
+            db.add(_bet(db, 45, won=True, n=1))
             db.commit()
             assert roi_for(db, "1x2", MONTH_DAYS).bets == 0
 
     def test_the_two_series_are_measured_separately(self, engine):
         with Session(engine) as db:
-            db.add(_bet(1, won=True, odds=3.0, basis="1x2", n=1))
-            db.add(_bet(1, won=False, odds=3.0, basis="overall", n=2))
+            db.add(_bet(db, 1, won=True, odds=3.0, basis="1x2", n=1))
+            db.add(_bet(db, 1, won=False, odds=3.0, basis="overall", n=2))
             db.commit()
 
             one_x_two = roi_for(db, "1x2", WEEK_DAYS)
@@ -114,8 +125,8 @@ class TestRoiSurvivesPruning:
         exactly right.
         """
         with Session(engine) as db:
-            db.add(_bet(10, won=True, odds=2.0, n=1))
-            db.add(_bet(20, won=True, odds=2.0, n=2))
+            db.add(_bet(db, 10, won=True, odds=2.0, n=1))
+            db.add(_bet(db, 20, won=True, odds=2.0, n=2))
             db.commit()
             result = roi_for(db, "1x2", MONTH_DAYS)
 

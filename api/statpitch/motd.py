@@ -23,9 +23,10 @@ confirmed falls back to the rest rather than going without a pick.
 import logging
 from datetime import UTC, date, datetime
 
-from sqlmodel import Field, Session, SQLModel, col, select
+from sqlmodel import Field, Relationship, Session, SQLModel, col, select
 
 from api.statpitch.models import StatPitchFixture
+from api.statpitch.teams import StatPitchTeam  # noqa: F401  resolves the relationship
 from api.statpitch.tiers import visible_competitions
 
 log = logging.getLogger("statpitch.motd")
@@ -47,16 +48,38 @@ class StatPitchMatchOfTheDay(SQLModel, table=True):
     match_date: date = Field(unique=True, index=True)
     fixture_id: str = Field(index=True, max_length=128)
 
-    # Denormalised so the pick stays readable after the fixture is pruned. Not
-    # authoritative — the fixture is — but a row saying only `fixture_id` is
-    # useless three days later when somebody asks what was picked.
-    competition_id: str = Field(max_length=64)
-    home_team: str = Field(max_length=128)
-    away_team: str = Field(max_length=128)
+    # The clubs and the competition, by reference. The pick still outlives the
+    # fixture it names — which is why this table exists — but the registry
+    # outlives both, so a reference reads for as long as a copy would and says
+    # the club's current name rather than the one it had that morning.
+    competition_id: str = Field(foreign_key="statpitch_competition.competition_id", max_length=64)
+    home_team_id: int = Field(foreign_key="statpitch_team.id", ondelete="RESTRICT", index=True)
+    away_team_id: int = Field(foreign_key="statpitch_team.id", ondelete="RESTRICT", index=True)
     # What it was picked on, kept so the choice can be second-guessed later.
     win_probability: float
 
     selected_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    home: "StatPitchTeam" = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "StatPitchMatchOfTheDay.home_team_id",
+            "lazy": "joined",
+        }
+    )
+    away: "StatPitchTeam" = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "StatPitchMatchOfTheDay.away_team_id",
+            "lazy": "joined",
+        }
+    )
+
+    @property
+    def home_team(self) -> str:
+        return self.home.display_name
+
+    @property
+    def away_team(self) -> str:
+        return self.away.display_name
 
 
 def _clearest_call(fixture: StatPitchFixture) -> float:
@@ -139,8 +162,8 @@ def ensure(db: Session, day: date, fixtures: list[StatPitchFixture]) -> StatPitc
             match_date=day,
             fixture_id=chosen.fixture_id,
             competition_id=chosen.competition_id,
-            home_team=chosen.home_team,
-            away_team=chosen.away_team,
+            home_team_id=chosen.home_team_id,
+            away_team_id=chosen.away_team_id,
             win_probability=_clearest_call(chosen),
         )
     )

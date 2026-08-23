@@ -145,8 +145,8 @@ def _ledger_row(
     return StatPitchSettledBet(
         fixture_id=fixture.fixture_id,
         competition_id=fixture.competition_id,
-        home_team=fixture.home_team,
-        away_team=fixture.away_team,
+        home_team_id=fixture.home_team_id,
+        away_team_id=fixture.away_team_id,
         match_date=fixture.match_date,
         basis=basis,
         selection=selection,
