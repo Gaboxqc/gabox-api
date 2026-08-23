@@ -420,6 +420,12 @@ is that table, and the four now hold a real foreign key.
   `icon_url`, plus `free_tier` so the seven cups can be shown as an upgrade
   rather than discovered by getting an empty list back. Ungated: which
   competitions exist is navigation, not product.
+- **Icons come from the same backfill as the crests**, under
+  `statpitch/competitions/` rather than among the badges. The league badge is on
+  ESPN's *scoreboard* payload, not the teams one, and the league id there is a
+  different id space from the logo path — so the href is read rather than
+  constructed. The dark variant is preferred; Coppa Italia has only a light one
+  and falls back.
 - Fixtures carry `competition_name`, `competition_short_name` and
   `competition_icon_url`, read through the reference and joined with the clubs,
   so a fixture list is still one query.

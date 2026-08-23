@@ -123,7 +123,21 @@ def crest_key(slug: str, source: bytes, size: int) -> str:
     simply what the dashboard draws as one — so this is the entire mechanism
     that keeps crests out of everything else's way.
     """
-    prefix = settings.r2_crest_prefix.strip("/")
+    return _asset_key(settings.r2_crest_prefix, slug, source, size)
+
+
+def competition_icon_key(competition_id: str, source: bytes, size: int) -> str:
+    """Where a competition icon lives.
+
+    Same scheme as a crest — content-addressed, derivable across sizes — under
+    its own prefix, so a bucket shared with other projects keeps the two sets
+    apart rather than interleaving twelve icons among four hundred badges.
+    """
+    return _asset_key(settings.r2_competition_prefix, competition_id, source, size)
+
+
+def _asset_key(prefix: str, slug: str, source: bytes, size: int) -> str:
+    prefix = prefix.strip("/")
     stem = f"{key_slug(slug)}/{content_hash(source)}-{size}.webp"
     return f"{prefix}/{stem}" if prefix else stem
 

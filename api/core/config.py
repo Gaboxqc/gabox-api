@@ -127,6 +127,8 @@ class Settings(BaseSettings):
     # whole of what puts crests in their own place in a shared bucket. Leading
     # and trailing slashes are stripped, and an empty value writes at the root.
     r2_crest_prefix: str = "statpitch/crests"
+    # Competition icons, kept beside the crests rather than among them.
+    r2_competition_prefix: str = "statpitch/competitions"
 
     odds_api_key: str = ""
     odds_api_region: str = "eu"

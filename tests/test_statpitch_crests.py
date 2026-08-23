@@ -402,3 +402,30 @@ def test_art_that_must_shrink_is_resampled_instead():
 
     with Image.open(io.BytesIO(normalise_crest(_png(400, 400), 128))) as decoded:
         assert decoded.size == (128, 128)
+
+
+def test_a_competition_icon_lands_under_its_own_prefix():
+    """Twelve icons interleaved among four hundred badges would be a mess to
+    look at in the bucket, and impossible to prune separately."""
+    key = storage.competition_icon_key("ENG.PL", b"badge", 512)
+
+    assert key.startswith("statpitch/competitions/eng-pl/")
+    assert key.endswith("-512.webp")
+    assert " " not in key
+
+
+def test_competition_icons_are_derivable_across_sizes():
+    source = b"the original png bytes"
+    large = storage.competition_icon_key("UEFA.UCL", source, 512)
+
+    assert large.replace("-512.webp", "-128.webp") == storage.competition_icon_key(
+        "UEFA.UCL", source, 128
+    )
+
+
+def test_icons_and_crests_never_collide():
+    """Same club-ish slug, same bytes, different prefix."""
+    source = b"same bytes"
+    assert storage.competition_icon_key("ENG.PL", source, 512) != storage.crest_key(
+        "ENG.PL", source, 512
+    )

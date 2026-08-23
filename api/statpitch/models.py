@@ -667,14 +667,17 @@ class SyncResultRead(SQLModel):
     warnings: list[str] = []
 
 
-# The `home` / `away` relationships name `StatPitchTeam` as a string, which
-# SQLAlchemy resolves at mapper configuration — by which time the class has to
-# have been imported. Importing it here, at the foot of the module rather than
-# the head, makes `import api.statpitch.models` sufficient on its own: the cycle
-# is safe in this direction because `teams` only needs `StatPitchFixture`, which
-# is fully defined by the time this line runs.
+# The relationships below name `StatPitchTeam` and `StatPitchCompetition` as
+# strings, which SQLAlchemy resolves at mapper configuration — by which time
+# those classes have to have been imported somewhere. Importing them here, at
+# the foot of the module, makes `import api.statpitch.models` sufficient on its
+# own; without it the mapper fails for any caller that imports this module
+# alone, which the app never does and a script always does.
 #
-# Without it the mapper fails only for callers that happen to import this module
-# alone — which the app never does and a script always does.
-from api.statpitch.competitions import StatPitchCompetition  # noqa: E402,F401
-from api.statpitch.teams import StatPitchTeam  # noqa: E402,F401  (see above)
+# Module imports rather than `from ... import Class`, and that distinction is
+# load-bearing. `teams` imports `models`, so whichever is imported first finds
+# the other half-built — and a `from` import would then ask a partially
+# initialised module for a class it has not defined yet. Binding the module
+# asks it for nothing, and the class is registered by the time the mapper looks.
+import api.statpitch.competitions  # noqa: E402,F401  (see above)
+import api.statpitch.teams  # noqa: E402,F401  (see above)

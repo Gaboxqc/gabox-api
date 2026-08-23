@@ -185,3 +185,49 @@ def test_a_fixture_cannot_name_a_competition_that_does_not_exist(engine, make_fi
         except IntegrityError:
             return
     raise AssertionError("an unknown competition_id was accepted")
+
+
+# ── Reading a league badge off ESPN ───────────────────────────────────────────
+
+
+def _scoreboard(*logos: dict) -> dict:
+    return {"leagues": [{"id": "700", "name": "English Premier League", "logos": list(logos)}]}
+
+
+def test_the_dark_league_badge_is_preferred():
+    """The UI is near-black, so the dark variant is the one worth having."""
+    from api.statpitch.crests import _pick_league_logo
+
+    picked = _pick_league_logo(
+        _scoreboard(
+            {
+                "href": "https://a.espncdn.com/i/leaguelogos/soccer/500/23.png",
+                "rel": ["full", "default"],
+            },
+            {
+                "href": "https://a.espncdn.com/i/leaguelogos/soccer/500-dark/23.png",
+                "rel": ["full", "dark"],
+            },
+        )
+    )
+    assert picked.endswith("500-dark/23.png")
+
+
+def test_a_competition_without_a_dark_badge_falls_back():
+    """Coppa Italia publishes only the light one."""
+    from api.statpitch.crests import _pick_league_logo
+
+    picked = _pick_league_logo(
+        _scoreboard(
+            {"href": "https://a.espncdn.com/i/leaguelogos/soccer/500/2569.png", "rel": ["full"]}
+        )
+    )
+    assert picked.endswith("500/2569.png")
+
+
+def test_a_competition_with_no_badge_at_all_is_none():
+    """A missing icon is a normal state, the same as a missing crest."""
+    from api.statpitch.crests import _pick_league_logo
+
+    assert _pick_league_logo(_scoreboard()) is None
+    assert _pick_league_logo({}) is None
