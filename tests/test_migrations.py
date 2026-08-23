@@ -24,6 +24,7 @@ import api.core.auth.models  # noqa: F401
 import api.portfolio.models  # noqa: F401
 import api.statpitch.accounts  # noqa: F401
 import api.statpitch.accounts.keys  # noqa: F401
+import api.statpitch.admin.grants  # noqa: F401
 import api.statpitch.models  # noqa: F401
 import api.statpitch.motd  # noqa: F401
 import api.statpitch.quota  # noqa: F401

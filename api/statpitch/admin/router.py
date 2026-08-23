@@ -33,9 +33,12 @@ from api.statpitch.accounts.models import (
     AdminAccountUpdateRequest,
     StatPitchAccount,
     StatPitchAccountSession,
+    TierGrantRead,
+    TierGrantRequest,
     utcnow,
 )
 from api.statpitch.accounts.sessions import revoke_all_sessions
+from api.statpitch.admin.grants import as_naive_utc, grant, history
 
 log = logging.getLogger("statpitch.admin")
 
@@ -272,3 +275,87 @@ async def delete_account(account_id: int, db: SessionDep, principal: AdminDep):
     db.commit()
 
     log.warning("Admin %s deleted StatPitch account %s (%s)", principal.username, account_id, email)
+
+
+# ==============================================================================
+# TIERS
+# ==============================================================================
+
+
+@router.patch(
+    "/accounts/{account_id}/tier",
+    response_model=AdminAccountRead,
+    operation_id="statpitch_admin_set_tier",
+    summary="Grant, extend or revoke a tier",
+)
+async def set_tier(
+    account_id: int,
+    payload: TierGrantRequest,
+    db: SessionDep,
+    principal: AdminDep,
+):
+    """Moves the account and writes a row into its history.
+
+    Granting the same tier again is an extension, not a mistake — it is how a
+    renewal is recorded, and it leaves its own entry.
+
+    An expiry already in the past is refused. It would technically work, in the
+    sense that `effective_tier` would read `free` immediately, but nobody means
+    that: it is a typo in a date, and honouring it silently would look like the
+    grant simply failed.
+    """
+    account = _account_or_404(db, account_id)
+
+    expires_at = as_naive_utc(payload.expires_at)
+    if expires_at is not None and expires_at <= utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="expires_at is already in the past; the grant would lapse immediately.",
+        )
+
+    grant(
+        db,
+        account,
+        tier=payload.tier,
+        expires_at=expires_at,
+        reason=payload.reason,
+        granted_by=principal.username or "api_key",
+    )
+    return _read(db, account)
+
+
+@router.get(
+    "/accounts/{account_id}/grants",
+    response_model=list[TierGrantRead],
+    operation_id="statpitch_admin_tier_history",
+    summary="Every tier this account has been given, newest first",
+)
+async def tier_history(account_id: int, db: SessionDep, _: AdminDep):
+    """What the account row cannot tell you: how it got here."""
+    _account_or_404(db, account_id)
+    return history(db, account_id)
+
+
+@router.post(
+    "/accounts/{account_id}/trial/reset",
+    response_model=AdminAccountRead,
+    operation_id="statpitch_admin_reset_trial",
+    summary="Let an account take the 14-day trial again",
+)
+async def reset_trial(account_id: int, db: SessionDep, principal: AdminDep):
+    """Clears `trial_used_at`, and nothing else.
+
+    Deliberately not a tier change: it does not grant Pro, it restores the
+    ability to *start* the trial from the product. Somebody whose trial was cut
+    short by a broken deploy wants this; somebody asking for a second free month
+    wants a grant, which is a different button and leaves a different trail.
+    """
+    account = _account_or_404(db, account_id)
+
+    account.trial_used_at = None
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+
+    log.info("Admin %s reset the trial on account %s", principal.username, account.id)
+    return _read(db, account)
