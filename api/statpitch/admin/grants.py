@@ -72,6 +72,7 @@ def grant(
     expires_at: datetime | None,
     reason: str,
     granted_by: str,
+    source: str = "manual",
 ) -> StatPitchTierGrant:
     """Move an account to `tier` and record why.
 
@@ -95,7 +96,9 @@ def grant(
     # Free has nothing to expire. Leaving a stale date behind would be harmless
     # today and confusing the moment somebody reads the row.
     account.tier_expires_at = None if tier == "free" else expires_at
-    account.tier_source = "manual"
+    # "manual" for an admin grant, "trial" when an approved request produced it.
+    # Both are grants; only the reason they exist differs.
+    account.tier_source = source
     account.tier_updated_at = now
     account.tier_updated_by = granted_by
 

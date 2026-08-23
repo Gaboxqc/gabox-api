@@ -33,6 +33,7 @@ import api.statpitch.models  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.motd  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.quota  # noqa: F401,E402  registers tables on the metadata
 import api.statpitch.teams  # noqa: F401,E402  registers tables on the metadata
+import api.statpitch.trials  # noqa: F401,E402  registers tables on the metadata
 from api.core.config import settings  # noqa: E402
 from api.core.database import get_session  # noqa: E402
 from main import app  # noqa: E402

@@ -295,41 +295,49 @@ def test_the_new_password_is_the_one_that_works(client, signup):
     )
 
 
-# ── Trial ────────────────────────────────────────────────────────────────────
+# ── Trial requests ───────────────────────────────────────────────────────────
 
 
-def test_the_trial_grants_pro_for_fourteen_days(client, signup, engine):
+def test_a_customer_can_ask_for_the_trial(client, signup):
     csrf = signup()
-    response = client.post("/statpitch/accounts/trial", headers=csrf)
+    response = client.post(
+        "/statpitch/accounts/trial/request", json={"message": "keen to try it"}, headers=csrf
+    )
 
-    assert response.status_code == 200
+    assert response.status_code == 201
     body = response.json()
-    assert body["tier"] == "pro"
-    assert body["trial_used"] is True
-
-    with Session(engine) as db:
-        account = db.exec(select(StatPitchAccount)).first()
-        assert account.tier_source == "trial"
-        remaining = account.tier_expires_at - utcnow()
-    assert timedelta(days=13) < remaining <= timedelta(days=14)
+    assert body["status"] == "pending"
+    assert body["message"] == "keen to try it"
 
 
-def test_the_trial_can_only_be_taken_once(client, signup, engine):
-    """Even after it lapses — a second one has to be a deliberate grant."""
+def test_asking_grants_nothing(client, signup):
+    """A request is not an entitlement — that is the whole change."""
     csrf = signup()
-    client.post("/statpitch/accounts/trial", headers=csrf)
-
-    with Session(engine) as db:
-        account = db.exec(select(StatPitchAccount)).first()
-        account.tier_expires_at = utcnow() - timedelta(seconds=1)
-        db.add(account)
-        db.commit()
+    client.post("/statpitch/accounts/trial/request", json={}, headers=csrf)
 
     assert client.get("/statpitch/accounts/me").json()["tier"] == "free"
-    assert client.post("/statpitch/accounts/trial", headers=csrf).status_code == 409
 
 
-def test_the_trial_is_refused_while_a_paid_tier_is_live(client, signup, engine):
+def test_a_message_is_optional(client, signup):
+    """Demanding a paragraph before somebody can ask is a way of getting fewer
+    requests."""
+    csrf = signup()
+    response = client.post("/statpitch/accounts/trial/request", json={}, headers=csrf)
+
+    assert response.status_code == 201
+    assert response.json()["message"] is None
+
+
+def test_asking_twice_is_refused_while_one_is_open(client, signup):
+    csrf = signup()
+    client.post("/statpitch/accounts/trial/request", json={}, headers=csrf)
+
+    second = client.post("/statpitch/accounts/trial/request", json={}, headers=csrf)
+    assert second.status_code == 409
+    assert "awaiting review" in second.json()["detail"]
+
+
+def test_a_paid_account_cannot_ask(client, signup, engine):
     csrf = signup()
     with Session(engine) as db:
         account = db.exec(select(StatPitchAccount)).first()
@@ -337,7 +345,44 @@ def test_the_trial_is_refused_while_a_paid_tier_is_live(client, signup, engine):
         db.add(account)
         db.commit()
 
-    assert client.post("/statpitch/accounts/trial", headers=csrf).status_code == 409
+    assert (
+        client.post("/statpitch/accounts/trial/request", json={}, headers=csrf).status_code == 409
+    )
+
+
+def test_an_account_that_already_had_a_trial_cannot_ask(client, signup, engine):
+    csrf = signup()
+    with Session(engine) as db:
+        account = db.exec(select(StatPitchAccount)).first()
+        account.trial_used_at = utcnow()
+        db.add(account)
+        db.commit()
+
+    assert (
+        client.post("/statpitch/accounts/trial/request", json={}, headers=csrf).status_code == 409
+    )
+
+
+def test_the_customer_can_see_where_their_request_stands(client, signup):
+    """What the frontend needs to choose between "Request a trial", "Awaiting
+    review" and "Your request was declined"."""
+    csrf = signup()
+    assert client.get("/statpitch/accounts/trial/request").json() is None
+
+    client.post("/statpitch/accounts/trial/request", json={}, headers=csrf)
+    assert client.get("/statpitch/accounts/trial/request").json()["status"] == "pending"
+
+
+def test_asking_needs_a_session(client):
+    assert client.post("/statpitch/accounts/trial/request", json={}).status_code == 401
+
+
+def test_there_is_no_self_serve_trial_any_more(client, signup):
+    """The old button granted Pro outright. It is gone, and its absence is worth
+    a test — a route that quietly came back would be a paid tier anyone could
+    give themselves."""
+    csrf = signup()
+    assert client.post("/statpitch/accounts/trial", headers=csrf).status_code == 404
 
 
 # ── Isolation from the admin ─────────────────────────────────────────────────

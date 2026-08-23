@@ -30,6 +30,7 @@ import api.statpitch.models  # noqa: F401
 import api.statpitch.motd  # noqa: F401
 import api.statpitch.quota  # noqa: F401
 import api.statpitch.teams  # noqa: F401
+import api.statpitch.trials  # noqa: F401
 from alembic import command
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

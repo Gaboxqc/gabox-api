@@ -413,3 +413,39 @@ class AdminSessionRead(SQLModel):
     live: bool = False
     ip_address: str | None = None
     user_agent: str | None = None
+
+
+class TrialRequestCreate(SQLModel):
+    """Asking for the trial.
+
+    `message` is optional. Demanding a paragraph before somebody can ask is a
+    way of getting fewer requests, which is not the goal.
+    """
+
+    message: str | None = Field(default=None, max_length=500)
+
+
+class TrialRequestRead(SQLModel):
+    """A request as its owner sees it."""
+
+    id: int
+    status: str
+    message: str | None = None
+    requested_at: datetime
+    decided_at: datetime | None = None
+    decision_reason: str | None = None
+
+
+class AdminTrialRequestRead(TrialRequestRead):
+    """The queue view, which also needs to say who is asking."""
+
+    account_id: int
+    account_email: str
+    decided_by: str | None = None
+
+
+class TrialDecision(SQLModel):
+    """Approving or declining. A reason is optional on the way in and worth
+    writing when the answer is no."""
+
+    reason: str | None = Field(default=None, max_length=200)
