@@ -443,10 +443,15 @@ exactly one place. A crest resolved today is visible to a fixture cached
 yesterday immediately, with no sync in between. Both clubs are eager-loaded, so
 a twenty-fixture list is still one query.
 
-`home_team` / `away_team` remain real columns on `statpitch_settled_bet` and
-`statpitch_match_of_the_day`, deliberately: those are records rather than
-caches, and both have to stay readable after the fixture they came from is
-pruned.
+`statpitch_settled_bet` and `statpitch_match_of_the_day` reference the registry
+too, with **`ondelete RESTRICT`**. Those are permanent records rather than
+caches, and the registry is what makes a reference safe for them: it is never
+pruned, so it reads for as long as a copy would — and RESTRICT means a club
+cannot be deleted while its results are still on the books. Renaming a club now
+fixes every record naming it, rather than leaving whichever spelling was current
+the morning the row was written.
+
+No club name or crest is stored more than once anywhere in the module.
 
 
 Clubs live in `statpitch_team`, which is permanent — unlike the fixtures, which

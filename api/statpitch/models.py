@@ -441,9 +441,14 @@ class StatPitchSettledBet(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
 
     fixture_id: str = Field(index=True)
-    competition_id: str = Field(index=True)
-    home_team: str
-    away_team: str
+    competition_id: str = Field(
+        foreign_key="statpitch_competition.competition_id", index=True, max_length=64
+    )
+    # RESTRICT, not CASCADE. This is a permanent record: a club must not be
+    # removable while its results are still on the books, and deleting the
+    # history to make a club deletable is exactly the wrong trade.
+    home_team_id: int = Field(foreign_key="statpitch_team.id", ondelete="RESTRICT", index=True)
+    away_team_id: int = Field(foreign_key="statpitch_team.id", ondelete="RESTRICT", index=True)
 
     # Nicaragua-local match day. ROI windows are measured against this, not
     # against settlement time, so a late-recorded result lands in the right week.
@@ -470,6 +475,27 @@ class StatPitchSettledBet(SQLModel, table=True):
     # Which model produced the probability. Predictions are immutable: a
     # retrain writes new rows rather than reinterpreting settled ones.
     model_version: str
+
+    home: "StatPitchTeam" = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "StatPitchSettledBet.home_team_id",
+            "lazy": "joined",
+        }
+    )
+    away: "StatPitchTeam" = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "StatPitchSettledBet.away_team_id",
+            "lazy": "joined",
+        }
+    )
+
+    @property
+    def home_team(self) -> str:
+        return self.home.display_name
+
+    @property
+    def away_team(self) -> str:
+        return self.away.display_name
 
 
 # ==============================================================================

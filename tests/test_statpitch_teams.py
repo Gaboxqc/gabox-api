@@ -211,3 +211,67 @@ def test_the_registry_survives_a_fixture_being_pruned(engine):
         db.commit()
 
         assert len(db.exec(select(StatPitchTeam)).all()) == 2
+
+
+# ── The registry underneath the permanent records ────────────────────────────
+
+
+def test_a_club_on_the_books_cannot_be_deleted(engine, make_fixture, seed_fixtures):
+    """`ondelete RESTRICT`, and the reason for it. A club must not be removable
+    while its results are still recorded, and cascading a season's history away
+    to make one deletable is not a trade worth offering."""
+    from sqlalchemy.exc import IntegrityError
+
+    from api.statpitch.clock import today_local
+    from api.statpitch.motd import ensure
+
+    (fixture,) = seed_fixtures(
+        make_fixture(home_team="Arsenal", home_win_prob=0.80, draw_prob=0.12)
+    )
+    with Session(engine) as db:
+        ensure(db, today_local(), [db.exec(select(StatPitchFixture)).one()])
+
+        club = db.exec(select(StatPitchTeam).where(StatPitchTeam.slug == "arsenal")).one()
+        db.delete(club)
+        try:
+            db.commit()
+        except IntegrityError:
+            return
+    raise AssertionError("a club with a recorded pick was deleted")
+
+
+def test_a_record_reports_the_clubs_current_name(engine, make_fixture, seed_fixtures):
+    """The gain from referencing rather than copying: renaming a club fixes
+    every record naming it, instead of leaving whichever spelling was current
+    the morning the row was written."""
+    from api.statpitch.clock import today_local
+    from api.statpitch.motd import ensure, stored_for
+
+    seed_fixtures(make_fixture(home_team="Arsenal", home_win_prob=0.80, draw_prob=0.12))
+    with Session(engine) as db:
+        ensure(db, today_local(), [db.exec(select(StatPitchFixture)).one()])
+
+        club = db.exec(select(StatPitchTeam).where(StatPitchTeam.slug == "arsenal")).one()
+        club.display_name = "Arsenal FC"
+        db.add(club)
+        db.commit()
+
+        assert stored_for(db, today_local()).home_team == "Arsenal FC"
+
+
+def test_a_pick_still_outlives_the_fixture_it_names(engine, make_fixture, seed_fixtures):
+    """The property the copies were there to provide, kept — because the
+    registry outlives the cache just as surely as a string would."""
+    from api.statpitch.clock import today_local
+    from api.statpitch.motd import ensure, stored_for
+
+    seed_fixtures(make_fixture(home_team="Arsenal", home_win_prob=0.80, draw_prob=0.12))
+    with Session(engine) as db:
+        rows = db.exec(select(StatPitchFixture)).all()
+        ensure(db, today_local(), rows)
+
+        for row in rows:
+            db.delete(row)
+        db.commit()
+
+        assert stored_for(db, today_local()).home_team == "Arsenal"
