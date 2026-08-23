@@ -26,11 +26,15 @@ from api.core.auth.passwords import hash_password
 from api.core.database import SessionDep
 from api.core.deps import PageDep
 from api.statpitch.accounts.keys import StatPitchApiKey
+from api.statpitch.accounts.keys import list_for as list_keys_for
+from api.statpitch.accounts.keys import revoke as revoke_key
 from api.statpitch.accounts.models import (
     AdminAccountCreated,
     AdminAccountCreateRequest,
     AdminAccountRead,
     AdminAccountUpdateRequest,
+    AdminSessionRead,
+    ApiKeyRead,
     StatPitchAccount,
     StatPitchAccountSession,
     TierGrantRead,
@@ -359,3 +363,115 @@ async def reset_trial(account_id: int, db: SessionDep, principal: AdminDep):
 
     log.info("Admin %s reset the trial on account %s", principal.username, account.id)
     return _read(db, account)
+
+
+# ==============================================================================
+# SESSIONS AND KEYS
+# ==============================================================================
+
+
+@router.get(
+    "/accounts/{account_id}/sessions",
+    response_model=list[AdminSessionRead],
+    operation_id="statpitch_admin_list_sessions",
+    summary="An account's sessions, newest first",
+)
+async def list_account_sessions(account_id: int, db: SessionDep, _: AdminDep):
+    """Revoked and expired sessions are listed too.
+
+    "Somebody was signed in from an address I do not recognise" is answered by
+    the history, not by what happens to still be live — so hiding the closed
+    ones would hide the thing being asked about.
+    """
+    _account_or_404(db, account_id)
+    now = utcnow()
+
+    rows = db.exec(
+        select(StatPitchAccountSession)
+        .where(StatPitchAccountSession.account_id == account_id)
+        .order_by(col(StatPitchAccountSession.created_at).desc())
+    ).all()
+
+    return [
+        AdminSessionRead(
+            id=row.id,
+            created_at=row.created_at,
+            last_used_at=row.last_used_at,
+            expires_at=row.expires_at,
+            revoked=row.revoked_at is not None,
+            live=row.revoked_at is None and row.expires_at > now,
+            ip_address=row.ip_address,
+            user_agent=row.user_agent,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/accounts/{account_id}/sessions/revoke-all",
+    response_model=AdminAccountRead,
+    operation_id="statpitch_admin_revoke_sessions",
+    summary="Sign an account out everywhere",
+)
+async def revoke_account_sessions(account_id: int, db: SessionDep, principal: AdminDep):
+    """For the call that starts "I think somebody else is using my account".
+
+    Leaves the account active — it stops the sessions, not the person. Barring
+    them entirely is `PATCH .../{id}` with `is_active: false`.
+    """
+    account = _account_or_404(db, account_id)
+    closed = revoke_all_sessions(db, account.id)
+
+    log.warning(
+        "Admin %s revoked %d session(s) on account %s", principal.username, closed, account.id
+    )
+    db.refresh(account)
+    return _read(db, account)
+
+
+@router.get(
+    "/accounts/{account_id}/keys",
+    response_model=list[ApiKeyRead],
+    operation_id="statpitch_admin_list_keys",
+    summary="An account's API keys",
+)
+async def list_account_keys(account_id: int, db: SessionDep, _: AdminDep):
+    """Never the key itself — only its hash was ever stored."""
+    _account_or_404(db, account_id)
+    return [
+        ApiKeyRead(
+            id=key.id,
+            name=key.name,
+            prefix=key.prefix,
+            created_at=key.created_at,
+            last_used_at=key.last_used_at,
+            revoked=key.revoked_at is not None,
+        )
+        for key in list_keys_for(db, account_id)
+    ]
+
+
+@router.delete(
+    "/keys/{key_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="statpitch_admin_revoke_key",
+    summary="Revoke an API key on a customer's behalf",
+)
+async def revoke_account_key(key_id: int, db: SessionDep, principal: AdminDep):
+    """Keyed on the key rather than nested under its account: a leaked key is
+    reported by its prefix, and looking up who owns it first is a step that
+    matters only to the person who is already holding the thing.
+
+    Revoked, never deleted, so a key that turns up in a log later is still
+    identifiable.
+    """
+    key = db.get(StatPitchApiKey, key_id)
+    if key is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No API key with id {key_id}.",
+        )
+
+    if key.revoked_at is None:
+        revoke_key(db, key)
+        log.warning("Admin %s revoked API key %s", principal.username, key.prefix)

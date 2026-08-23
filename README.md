@@ -262,6 +262,10 @@ they hold.
 | `PATCH` | `/statpitch/admin/accounts/{id}/tier` | `{tier, expires_at, reason}` — grant, extend or revoke |
 | `GET` | `/statpitch/admin/accounts/{id}/grants` | Every tier this account has held, newest first |
 | `POST` | `/statpitch/admin/accounts/{id}/trial/reset` | Let them start the 14-day trial again |
+| `GET` | `/statpitch/admin/accounts/{id}/sessions` | Every session, live or closed, with IP and user agent |
+| `POST` | `/statpitch/admin/accounts/{id}/sessions/revoke-all` | Sign them out everywhere; account stays usable |
+| `GET` | `/statpitch/admin/accounts/{id}/keys` | Their API keys — never the key itself |
+| `DELETE` | `/statpitch/admin/keys/{key_id}` | Revoke a key on their behalf |
 
 - **Both tiers are reported.** `tier` is what was granted, `effective_tier` is
   what the account has today. A lapsed Elite showing only `free` would look like
@@ -287,6 +291,15 @@ they hold.
 - **Resetting the trial is not a tier grant.** It restores the ability to
   *start* the trial; somebody asking for a free month wants a grant, which is a
   different call and leaves a different trail.
+- **Closed sessions are listed too.** "Somebody was signed in from an address I
+  do not recognise" is answered by the history, not by whatever happens to still
+  be open — so `live` and `revoked` are both reported.
+- **Revoking sessions is not the same as barring the account.** It stops the
+  sessions and leaves the person able to log back in; barring them is
+  `PATCH .../{id}` with `is_active: false`.
+- **The key-revoke route is keyed on the key**, not nested under its account: a
+  leaked key is reported by its prefix, and looking up its owner first helps
+  nobody.
 - Writes are recorded by the existing audit middleware.
 
 ### Tiers
