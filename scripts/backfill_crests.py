@@ -1,8 +1,9 @@
-"""Fill the club registry's crests from ESPN, via Cloudflare R2.
+"""Fill the club crests and competition icons from ESPN, via Cloudflare R2.
 
     python -m scripts.backfill_crests --dry-run     # report, change nothing
     python -m scripts.backfill_crests               # resolve and upload
     python -m scripts.backfill_crests --only arsenal
+    python -m scripts.backfill_crests --skip-competitions
     python -m scripts.backfill_crests --refresh     # re-resolve clubs that have one
 
 Run it after a sync has populated `statpitch_team`, and again whenever the
@@ -36,17 +37,26 @@ import httpx
 from sqlmodel import Session, select
 
 from api.core.database import engine
+from api.statpitch.competitions import all_competitions
+from api.statpitch.competitions import seed as seed_competitions
 from api.statpitch.crests import (
     CREST_SIZES,
     DEFAULT_CREST_SIZE,
     EspnTeam,
     describe_failure,
     fetch_espn_teams,
+    fetch_league_logo,
     normalise_crest,
     resolve_crest,
 )
 from api.statpitch.leagues import ESPN_LEAGUE_SLUGS
-from api.statpitch.storage import StorageUnavailable, crest_key, is_configured, put_crest
+from api.statpitch.storage import (
+    StorageUnavailable,
+    competition_icon_key,
+    crest_key,
+    is_configured,
+    put_crest,
+)
 from api.statpitch.teams import StatPitchTeam
 
 log = logging.getLogger("backfill_crests")
@@ -62,6 +72,8 @@ class Report:
     uploaded: int = 0
     skipped: int = 0
     unresolved: list[str] = field(default_factory=list)
+    icons: int = 0
+    icons_missing: list[str] = field(default_factory=list)
 
     def render(self) -> str:
         lines = [
@@ -70,7 +82,12 @@ class Report:
             f"  uploaded   {self.uploaded}",
             f"  unchanged  {self.skipped}",
             f"  unresolved {len(self.unresolved)}",
+            f"  icons      {self.icons}",
         ]
+        if self.icons_missing:
+            lines.append("")
+            lines.append("  Competitions ESPN publishes no icon for:")
+            lines.extend(f"    - {name}" for name in self.icons_missing)
         if self.unresolved:
             lines.append("")
             lines.append("  Needs a manual alias or a crest from elsewhere:")
@@ -157,7 +174,76 @@ async def _store_crest(
     return primary_url, primary_key, uploaded
 
 
-async def run(only: str | None, refresh: bool, dry_run: bool) -> Report:
+async def _backfill_competitions(report: Report, *, refresh: bool, dry_run: bool) -> None:
+    """Twelve league badges, through the same pipeline as the crests.
+
+    No matching involved: a competition already knows its ESPN slug, so this is
+    fetch, normalise, upload — the hard part was only ever the club names.
+    """
+    with Session(engine) as db:
+        seed_competitions(db)
+        rows = [
+            row
+            for row in all_competitions(db)
+            if row.espn_slug and (refresh or row.icon_url is None)
+        ]
+
+        if not rows:
+            return
+
+        print()
+        print(f"Resolving {len(rows)} competition icon(s):")
+
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            for competition in rows:
+                try:
+                    source_url = await fetch_league_logo(client, competition.espn_slug)
+                except httpx.HTTPError as exc:
+                    log.warning("Could not read %s: %s", competition.competition_id, exc)
+                    source_url = None
+
+                if source_url is None:
+                    report.icons_missing.append(competition.name)
+                    print(f"  --   {competition.name:32} no icon published")
+                    continue
+
+                raw = await _download(client, source_url)
+                if raw is None:
+                    report.icons_missing.append(f"{competition.name}: download failed")
+                    continue
+
+                primary_url = primary_key = None
+                for size in CREST_SIZES:
+                    payload = normalise_crest(raw, size)
+                    key = competition_icon_key(competition.competition_id, raw, size)
+
+                    if dry_run:
+                        url = f"(dry-run) {key}"
+                    else:
+                        url, _ = put_crest(key, payload, force=refresh)
+
+                    if size == DEFAULT_CREST_SIZE:
+                        primary_url, primary_key = url, key
+
+                report.icons += 1
+                print(f"  ok   {competition.name:32} {len(raw):>7}B")
+
+                if dry_run:
+                    continue
+
+                competition.icon_url = primary_url
+                competition.icon_key = primary_key
+                competition.icon_source = "espn"
+                competition.icon_updated_at = datetime.now(UTC)
+                db.add(competition)
+
+            if not dry_run:
+                db.commit()
+
+
+async def run(
+    only: str | None, refresh: bool, dry_run: bool, skip_competitions: bool = False
+) -> Report:
     report = Report()
 
     print("Reading ESPN team lists:")
@@ -230,6 +316,9 @@ async def run(only: str | None, refresh: bool, dry_run: bool) -> Report:
             if not dry_run:
                 db.commit()
 
+    if not skip_competitions:
+        await _backfill_competitions(report, refresh=refresh, dry_run=dry_run)
+
     return report
 
 
@@ -242,6 +331,11 @@ def main() -> int:
         "--refresh",
         action="store_true",
         help="Re-resolve clubs that already have a crest, not only the empty ones.",
+    )
+    parser.add_argument(
+        "--skip-competitions",
+        action="store_true",
+        help="Only do club crests, leaving the competition icons alone.",
     )
     parser.add_argument(
         "--dry-run",
@@ -259,7 +353,7 @@ def main() -> int:
         return 1
 
     try:
-        report = asyncio.run(run(args.only, args.refresh, args.dry_run))
+        report = asyncio.run(run(args.only, args.refresh, args.dry_run, args.skip_competitions))
     except StorageUnavailable as exc:
         print(str(exc), file=sys.stderr)
         return 1

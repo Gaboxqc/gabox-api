@@ -34,6 +34,11 @@ from api.statpitch.matching import similarity
 log = logging.getLogger("statpitch.crests")
 
 ESPN_TEAMS_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/teams"
+# The competition's own badge. It is on the *scoreboard* payload and not on the
+# teams one, and the league id there ("700" for the Premier League) is a
+# different id space from the one the logo path uses ("23") — so the href has to
+# be read rather than constructed.
+ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard"
 
 # Resemblance a name must reach before its crest is considered at all.
 MIN_CREST_SIMILARITY = 0.72
@@ -295,3 +300,32 @@ def normalise_crest(raw: bytes, size: int) -> bytes:
             canvas.save(buffer, format="WEBP", **options)
             candidates.append(buffer.getvalue())
         return min(candidates, key=len)
+
+
+async def fetch_league_logo(client: httpx.AsyncClient, league_slug: str) -> str | None:
+    """The competition's badge, preferring the dark variant.
+
+    Returns None when ESPN publishes none — Coppa Italia has no dark version,
+    and a competition could have neither. A missing icon is a normal state, the
+    same as a missing crest.
+    """
+    response = await client.get(ESPN_SCOREBOARD_URL.format(slug=league_slug))
+    response.raise_for_status()
+
+    return _pick_league_logo(response.json())
+
+
+def _pick_league_logo(payload: dict) -> str | None:
+    """The dark badge if there is one, otherwise whatever there is.
+
+    Split out from the fetch so the choice can be tested without the network,
+    which is the only interesting part of it.
+    """
+    leagues = payload.get("leagues") or []
+    if not leagues:
+        return None
+
+    logos = leagues[0].get("logos") or []
+    dark = next((logo.get("href") for logo in logos if "dark" in (logo.get("rel") or [])), None)
+    light = next((logo.get("href") for logo in logos if logo.get("href")), None)
+    return dark or light
