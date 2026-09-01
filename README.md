@@ -38,8 +38,9 @@ api/
     client.py      StatPitch HTTP client; batched, retried, cold-start aware
     clock.py       The single definition of "today" (local, not UTC)
     leagues.py     Competition -> Odds API sport key
-    matching.py    Joins StatPitch club names to The Odds API's
-    odds_service.py   Real bookmaker prices
+    matching.py    Joins StatPitch club names to The Odds API's (results only)
+    selections.py  Translates StatPitch's selection names into ours
+    odds_api.py    What is left of The Odds API: credentials, and scores
     scores_service.py Final scores — StatPitch has no results endpoint
     pricing.py     Expected value and Kelly staking
     settlement.py  Settling, banking the ledger, pruning the cache
@@ -525,7 +526,8 @@ Full reference: **[docs/STATPITCH.md](docs/STATPITCH.md)**.
 [StatPitch](https://statpitch-api.onrender.com/docs) is stateless and supplies
 probabilities only. It never recommends a bet, its `fair_odds` are no-vig and
 unbettable, and it has no results endpoint — so real prices and final scores
-come from The Odds API, and the selections are ours (EV and quarter-Kelly).
+come from StatPitch's own 25-book panel. Selections are both ours (EV and
+quarter-Kelly) and StatPitch's own rule, banked as separate series.
 
 Fixtures are shown for three days and deleted; ROI is measured over seven and
 thirty. Those cannot share a table, so there are two: `statpitch_fixture` is a

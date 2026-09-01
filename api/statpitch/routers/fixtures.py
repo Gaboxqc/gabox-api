@@ -11,19 +11,23 @@ from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import case
 from sqlmodel import col, func, select
 
 from api.core.database import SessionDep
 from api.core.deps import PageDep
 from api.core.security import validate_api_key
 from api.statpitch.accounts.deps import CallerTier, CurrentAccount
+from api.statpitch.bets import build_bets_today
 from api.statpitch.client import StatPitchError, StatPitchRefusal
 from api.statpitch.clock import current_window
 from api.statpitch.competitions import all_competitions
 from api.statpitch.models import (
+    BetsTodayRead,
     CompetitionRead,
     SettledBetRead,
     StatPitchFixture,
+    StatPitchSelection,
     StatPitchSettledBet,
     StatsRead,
     SyncResultRead,
@@ -31,7 +35,7 @@ from api.statpitch.models import (
 )
 from api.statpitch.motd import choose as choose_match_of_the_day
 from api.statpitch.motd import fixture_for as match_of_the_day_fixture
-from api.statpitch.odds_service import OddsUnavailable
+from api.statpitch.odds_api import OddsUnavailable
 from api.statpitch.quota import remaining, unlock, unlocked_ids
 from api.statpitch.serialization import (
     FixtureFreeRead,
@@ -151,7 +155,9 @@ async def sync(db: SessionDep):
         fetched=report.fetched,
         stored=report.stored,
         priced=report.priced,
-        unmatched_odds=report.unmatched_odds,
+        unpriced=report.unpriced,
+        selections=report.selections,
+        rule_bets=report.rule_bets,
         settled=report.settled,
         ledgered=report.ledgered,
         pruned=report.pruned,
@@ -341,30 +347,103 @@ async def best_today(db: SessionDep, response: Response, tier: CallerTier, accou
 
 
 @router.get(
-    "/fixtures/today/value-bets",
-    response_model=list[FixtureResponse],
-    summary="Today's positive-edge picks, strongest Kelly first",
+    "/bets/today",
+    response_model=BetsTodayRead,
+    summary="StatPitch's own pick for today, with the caveats that qualify it",
     description=(
-        "Only fixtures whose best selection clears the minimum fractional Kelly. "
-        "Ranking by Kelly rather than EV filters out the high-EV, low-probability "
-        "picks that look attractive and are not worth the variance."
+        "Served from cache, not proxied: the upstream instance sleeps after "
+        "fifteen minutes idle, and a proxied read would drop the caveats at "
+        "exactly the moment somebody is looking at a bet.\n\n"
+        "**`caveat` is never null while `bets` is non-empty, and must be "
+        "rendered.** The rule behind these picks has five seasons of measured "
+        "closing-line value but runs on a price panel that has none, so its "
+        "calibration is inherited rather than re-measured. A pick shown without "
+        "that statement claims more than the evidence supports.\n\n"
+        "An empty day is a normal answer, not a 404 — the rule fires only where "
+        "a book misprices against the benchmark, which is most days not at all. "
+        "`reason` and `empty_because` say why."
     ),
 )
-async def value_bets_today(db: SessionDep, tier: CallerTier):
+async def bets_today(db: SessionDep, tier: CallerTier):
+    """Pro and above. A staked recommendation is the edge indicator itself."""
+    _require(Feature.EDGE_INDICATORS, tier)
+    return build_bets_today(db, current_window().today, tier)
+
+
+@router.get(
+    "/fixtures/today/value-bets",
+    response_model=list[FixtureResponse],
+    summary="Today's positive-edge picks, strongest stake first",
+    description=(
+        "`basis=overall` (the default) and `basis=1x2` are **our** selections: "
+        "fixtures whose best pick clears the minimum fractional Kelly, ranked by "
+        "Kelly rather than EV so the high-EV, low-probability picks that are not "
+        "worth the variance fall away.\n\n"
+        "`basis=rule` is **StatPitch's** own selection rule instead, ranked by "
+        "the stake it assigned. The two are different strategies measured as "
+        "separate series — see `/stats` — so this parameter switches between "
+        "them rather than merging them."
+    ),
+)
+async def value_bets_today(
+    db: SessionDep,
+    tier: CallerTier,
+    basis: Annotated[str, Query(description="overall (default), 1x2, or rule")] = "overall",
+):
     """Pro and above. This endpoint *is* the edge indicator, so a free version
-    would either be empty or give away the thing being sold."""
+    would either be empty or give away the thing being sold.
+
+    `rule` deliberately does not become the default. This endpoint has been
+    measuring our own Kelly selections since it existed, and quietly repointing
+    it would rewrite what its numbers have always meant.
+    """
     _require(Feature.EDGE_INDICATORS, tier)
 
-    fixtures = db.exec(
-        select(StatPitchFixture)
-        .where(
-            StatPitchFixture.match_date == current_window().today,
-            StatPitchFixture.best_overall_bet.is_not(None),
+    if basis not in BASES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"basis must be one of {', '.join(BASES)}.",
         )
-        .order_by(StatPitchFixture.best_overall_kelly.desc())
-    ).all()
+
+    today = current_window().today
+
+    if basis == "rule":
+        query = (
+            select(StatPitchFixture)
+            .join(
+                StatPitchSelection,
+                col(StatPitchSelection.fixture_id) == col(StatPitchFixture.fixture_id),
+            )
+            .where(
+                StatPitchFixture.match_date == today,
+                StatPitchSelection.stake_fraction > 0,
+            )
+            .order_by(col(StatPitchSelection.stake_fraction).desc())
+        )
+    else:
+        pick = StatPitchFixture.best_bet if basis == "1x2" else StatPitchFixture.best_overall_bet
+        # The 1X2 series has no stored Kelly of its own — only `best_bet` and
+        # its price — so the stake is read from whichever side was picked.
+        # Ranking by `kelly_home` regardless would sort a draw pick by a number
+        # belonging to a different selection, and `best_overall_kelly` is the
+        # wrong column too the moment a market outside 1X2 can win it.
+        rank = (
+            case(
+                (StatPitchFixture.best_bet == "home_win", StatPitchFixture.kelly_home),
+                (StatPitchFixture.best_bet == "draw", StatPitchFixture.kelly_draw),
+                (StatPitchFixture.best_bet == "away_win", StatPitchFixture.kelly_away),
+            )
+            if basis == "1x2"
+            else StatPitchFixture.best_overall_kelly
+        )
+        query = (
+            select(StatPitchFixture)
+            .where(StatPitchFixture.match_date == today, pick.is_not(None))
+            .order_by(rank.desc())
+        )
+
     # Pro and above only, so there is no allowance to consult.
-    return serialize_fixtures(fixtures, tier)
+    return serialize_fixtures(db.exec(query).all(), tier)
 
 
 @router.get(

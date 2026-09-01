@@ -38,15 +38,20 @@ upstream all refuse by design. It also has **no results endpoint**.
 
 So the three things ROI actually needs come from three different places:
 
-| Needed | Source | Why not StatPitch |
+| Needed | Source | Note |
 |---|---|---|
-| A selection | Ours — EV and quarter-Kelly | It refuses to pick one |
-| A real price | The Odds API | Its `fair_odds` are no-vig and unbettable |
-| A final score | The Odds API `/scores` | It has no results endpoint |
+| A selection | Ours, *and* StatPitch's | Two independent series, never averaged |
+| A real price | StatPitch `/card/upcoming` | 25-book panel; `odds` is the best quote |
+| A final score | The Odds API `/scores` | StatPitch has no results endpoint |
 
-**The predictions are StatPitch's. The bets are ours.** Every selection, stake
-and ROI figure in this API is computed here, from StatPitch's probabilities and
-a real bookmaker price. Judge the track record accordingly.
+**The predictions are StatPitch's. The bets are both.** StatPitch now prices its
+own card and stakes its own rule, so there are three parallel track records:
+`1x2` and `overall` are ours (EV and quarter-Kelly over its probabilities), and
+`rule` is StatPitch's own selection measured at its own numbers. They are
+tagged, never merged, so it stays possible to tell which one earned.
+
+A price arrives keyed by `fixture_id`, so nothing is joined by club name any
+more — see §8, where matching now covers results only.
 
 **Fixtures are temporary, the record is permanent.** Two tables, two lifetimes —
 see [The three-day window](#2-the-three-day-window).
@@ -171,9 +176,15 @@ bases in that order.
 ### `odds_coverage` says whether an odds event matched at all
 
 A boolean, and the honest way to ask "is this fixture priced". It is not the
-same as "every market has a price": with the default `ODDS_API_MARKETS=h2h` a
-fixture can have `odds_coverage: true`, real 1X2 odds, and null for all eight
-goals and BTTS markets.
+same as "every market has a price". StatPitch publishes `market_families:
+["1x2"]` and nothing else, so a fixture routinely has real 1X2 odds and null for
+all eight goals and BTTS markets — those have had no price source since The Odds
+API stopped being asked for markets.
+
+One consequence worth knowing: with a single market priced, `best_bet` and
+`best_overall_bet` select the same row every time, so the `1x2` and `overall`
+ROI series read identically. The gap between them is not evidence of anything
+until totals ship upstream.
 
 ### A priced fixture can still produce no bet
 
@@ -229,9 +240,31 @@ whenever this is false.
 
 **`commence_time` vs `kickoff`** — `kickoff` is a bare `"19:00"` with no
 timezone and cannot be converted to a local day. `commence_time` is a real UTC
-instant from the odds feed, and is what `match_date` is derived from. It is null
-when the fixture could not be matched to an odds event, and `match_date` then
-falls back to StatPitch's nominal `source_date`.
+instant, taken from `kickoff_utc` on StatPitch's `/odds/matchday`, and is what
+`match_date` is derived from. It is null for a fixture that endpoint has not
+published yet, and `match_date` then falls back to StatPitch's nominal
+`source_date`.
+
+**`selections`** — Pro and above. StatPitch's own priced rows for this fixture,
+one per outcome, and the fullest form of "Book vs ML". The four prices are
+deliberately separate and must not be collapsed into one:
+
+| Field | What it is |
+|---|---|
+| `odds` | The best quote. **The only bettable number of the four** |
+| `reference_odds` | The benchmark book the rule measured against |
+| `consensus_odds` | The panel mean |
+| `fair_odds` | That consensus, de-vigged |
+
+`stake_fraction` separates analysis from recommendation: everything in the list
+has been priced and graded, and only rows above zero are picks. `reasons` says
+why a row was refused, in readable prose. The list is empty rather than absent
+on an unpriced fixture, which is normal days ahead of kickoff.
+
+Note `model_edge` is `0.0` on every row today, and `p_used` equals `q_fair`: the
+market-shrinkage weight fits at 0.000, so selections come from a *price*
+disagreement between a book and the benchmark, not from the model out-predicting
+the market. **Do not label one a "model pick".**
 
 **`fully_rated`** — `false` means at least one club had no measured Elo and fell
 back to a prior. The number is still well formed, but it is a much weaker claim.
@@ -270,7 +303,8 @@ All under `/statpitch`. `GET` is public; the sync needs `X-API-KEY`.
 | `GET` | `/fixtures/window` | The three live dates |
 | `GET` | `/fixtures/yesterday` \| `/today` \| `/tomorrow` | One day each |
 | `GET` | `/fixtures/today/best` | Highest win probability |
-| `GET` | `/fixtures/today/value-bets` | Positive edge, best Kelly first |
+| `GET` | `/fixtures/today/value-bets` | Positive edge, strongest stake first |
+| `GET` | `/bets/today` | StatPitch's own pick, with its caveats |
 | `GET` | `/fixtures/{id}` | By numeric primary key |
 | `GET` | `/stats` | Today's shape plus rolling ROI |
 | `GET` | `/ledger` | The permanent record, paginated |
@@ -290,16 +324,49 @@ complete day.
 
 ### `GET /fixtures/today/value-bets`
 
-Only fixtures whose best selection clears the minimum fractional Kelly, ordered
-by Kelly descending. Ranking on Kelly rather than EV is deliberate: EV alone
-cannot tell a sound bet from a lottery ticket, since a 5% shot at 25.0 carries
-+25% EV and a stake far too small to be worth the variance.
+| Parameter | Type | Default |
+|---|---|---|
+| `basis` | `overall` \| `1x2` \| `rule` | `overall` |
+
+`overall` and `1x2` are **our** selections: fixtures whose best pick clears the
+minimum fractional Kelly, ordered by Kelly descending. Ranking on Kelly rather
+than EV is deliberate — EV alone cannot tell a sound bet from a lottery ticket,
+since a 5% shot at 25.0 carries +25% EV and a stake far too small to be worth
+the variance.
+
+`rule` is **StatPitch's** own selection rule instead, ordered by the stake it
+assigned. It is not the default and will not become one: this endpoint has been
+measuring our Kelly selections since it existed, and repointing it would rewrite
+what its numbers have always meant. An unknown `basis` is a 422.
+
+### `GET /bets/today`
+
+StatPitch's own daily pick, served from cache rather than proxied — the upstream
+instance sleeps after fifteen minutes idle, and a proxied read would drop the
+caveats at exactly the moment somebody is looking at a bet.
+
+**`caveat` is never null while `bets` is non-empty, and has to be rendered.**
+The rule behind these picks carries five seasons of measured closing-line value
+(+0.51%, t=7.53, 7,790 matches) but runs on a 25-book panel that has none, so
+its calibration is inherited rather than re-measured. A pick shown without that
+statement claims more than the evidence supports. If the upstream string is
+somehow missing, one is built from the rule status stored on the pick itself, so
+there is no path where a recommendation arrives unqualified.
+
+An empty day is a `200`, not a `404`. The rule fires only where a book misprices
+against its benchmark, which on most days is nowhere at all — `reason` and
+`empty_because` say which. Note that `empty_because.cause` is frequently
+`fixtures_today_carry_no_price`: prices publish per matchday block, so a day can
+have fixtures and no card.
+
+Pro and above. A staked recommendation *is* the edge indicator, so there is no
+reduced free version worth returning.
 
 ### `GET /ledger`
 
 | Parameter | Type | Default |
 |---|---|---|
-| `basis` | `1x2` \| `overall` | both |
+| `basis` | `1x2` \| `overall` \| `rule` | both |
 | `competition_id` | string | all |
 | `offset` | int >= 0 | `0` |
 | `limit` | int 1-100 | `10` |
@@ -355,6 +422,7 @@ and both promise a single resource.
   "high_confidence_today": 0,
   "high_confidence_threshold": 0.7,
   "value_bets_today": 1,
+  "rule_bets_today": 1,
   "roi": [
     {
       "basis": "1x2",
@@ -363,22 +431,40 @@ and both promise a single resource.
       "month": { "bets": 1, "wins": 1, "staked_units": 1.0, "returned_units": 1.45,
                  "pnl_units": 0.45, "roi_pct": 45.0, "hit_rate_pct": 100.0 }
     },
-    { "basis": "overall", "week": {}, "month": {} }
+    { "basis": "overall", "week": {}, "month": {} },
+    { "basis": "rule", "week": {}, "month": {} }
   ]
 }
 ```
 
-### Two series, never averaged
+`value_bets_today` counts our Kelly picks; `rule_bets_today` counts StatPitch's
+staked selections. A fixture can easily carry one and not the other.
 
-`roi` always has exactly two entries, and they measure **different strategies**:
+### Three series, never averaged
 
-| basis | what it bets |
-|---|---|
-| `1x2` | The best home/draw/away pick only |
-| `overall` | The best pick across 1X2, over/under and BTTS |
+`roi` always has exactly three entries, and they measure **different
+strategies**:
 
-They are kept apart so you can see whether the multi-market Kelly filter
-actually beats plain 1X2. Averaging them would answer neither question.
+| basis | whose selection | what it bets |
+|---|---|---|
+| `1x2` | Ours | The best home/draw/away pick only |
+| `overall` | Ours | The best pick across 1X2, over/under and BTTS |
+| `rule` | StatPitch's | Its own selection rule, at its own price and probability |
+
+The first two are kept apart so you can see whether the multi-market Kelly
+filter actually beats plain 1X2. The third is kept apart from both because it is
+not our selection at all: it is measured at StatPitch's `p_used` and its own
+quote, and scoring it against our inputs would measure neither system.
+Averaging any of them would answer none of the three questions.
+
+Two things to know about reading these today:
+
+- **`1x2` and `overall` currently agree.** Only the 1X2 family carries a price,
+  so the across-markets pick and the confined one are the same row every time.
+  Their two figures will read identically until totals ship upstream, and the
+  gap between them is not evidence of anything meanwhile.
+- **`rule` accrues slowly.** At most three bets a day across all competitions,
+  and most days none — so expect long stretches where its window is `null`.
 
 ### What the numbers mean
 
@@ -424,7 +510,9 @@ re-priced, so a settled bet cannot be silently rewritten.
   "fetched": 7,
   "stored": 7,
   "priced": 5,
-  "unmatched_odds": 2,
+  "unpriced": 2,
+  "selections": 84,
+  "rule_bets": 1,
   "settled": 3,
   "ledgered": 4,
   "pruned": 2,
@@ -466,10 +554,7 @@ have less to serve.
 | `STATPITCH_COMPETITIONS` | the five priced leagues | Comma-separated |
 | `STATPITCH_TIMEZONE` | `America/Managua` | Any IANA zone, validated at boot |
 | `STATPITCH_RETENTION_DAYS` | `1` | Days kept either side of today |
-| `ODDS_API_KEY` | none | Without it, predictions store but never price |
-| `ODDS_API_REGION` | `eu` | |
-| `ODDS_API_MARKETS` | `h2h` | See quota below |
-| `ODDS_API_BOOKMAKERS` | all | Comma-separated to restrict |
+| `ODDS_API_KEY` | none | Results only. Without it nothing settles and no ROI accrues |
 | `CORS_ORIGINS` | localhost `5173`–`5175`, localhost `8000`, `gabrielmayorga.dev`, `www.gabrielmayorga.dev` | Comma-separated or a JSON list |
 
 ### CORS
@@ -486,18 +571,14 @@ correct behaviour and not evidence of a fault.
 
 ### Quota
 
-The Odds API costs **one request per market per league per run**. Against a
-500/month free tier:
+Prices are free now — StatPitch bills nothing and returns the whole card in
+one request. What is left on The Odds API is **scores only**: one request per
+league per run, roughly 150/month across five leagues against the 500/month free
+tier, with nothing else competing for the budget.
 
-| Markets | 5 leagues, daily | Verdict |
-|---|---|---|
-| `h2h` | ~150/month | comfortable |
-| `h2h,totals` | ~300/month | workable |
-| `h2h,totals,btts` | ~450/month | over budget once scores are counted |
-
-Scores cost one request per league per run on top. `h2h` alone is the default
-for that reason. Widening `ODDS_API_MARKETS` enables the over/under and BTTS
-markets in the `overall` series, but needs a paid tier to be sustainable.
+That is the whole reason the price source moved. Under the old arrangement
+`h2h` alone cost ~150/month and adding totals and BTTS took it to ~450 before
+scores were counted, which is why only `h2h` was ever enabled.
 
 ---
 
@@ -507,13 +588,18 @@ markets in the `overall` series, but needs a paid tier to be sustainable.
 
 | Symptom | Likely cause |
 |---|---|
-| `fetched` high, `priced` 0 | `ODDS_API_KEY` missing or quota exhausted — check `warnings` |
-| `unmatched_odds` high | Club names failed to join; see `matching.py` |
+| `fetched` high, `priced` 0 | StatPitch has not published this matchday block yet — check `warnings` |
+| `unpriced` high | Normal days ahead of kickoff: the price feed publishes per matchday block |
+| `settled` stuck at 0 | Club names failed to join a score; see `matching.py` |
 | `settled` 0 with finished matches | Scores lag; the next run picks them up |
 | `pruned` 0 with old fixtures | Correct — they are unbanked and being protected |
 | ROI null after weeks | Nothing ever priced, so no bet was ever placed |
 
 ### Club name matching
+
+**Results only.** Prices arrive from StatPitch keyed by `fixture_id`, so the
+whole class of mismatch this guards against cannot happen to a price any more.
+It can still happen to a score, which is why the module has not gone anywhere.
 
 StatPitch uses full registered names, The Odds API short trading names. The join
 normalises both (accents, corporate prefixes, founding years) and then scores
@@ -521,9 +607,9 @@ the **pair**. Matching one name at a time is unsafe: `RCD Espanyol de Barcelona`
 resembles `Barcelona` about as much as it resembles `Espanyol`, and only the
 away side breaks the tie.
 
-When no candidate clears the threshold the fixture is stored **unpriced** rather
+When no candidate clears the threshold the fixture stays **unsettled** rather
 than matched to a guess. That is deliberate — a wrong match would attach another
-club's odds to a prediction and corrupt the ledger permanently.
+match's scoreline to a bet and corrupt the ledger permanently.
 
 ### Status codes
 
@@ -534,7 +620,7 @@ club's odds to a prediction and corrupt the ledger permanently.
 | `404` | `/fixtures/{id}` or `/fixtures/today/best` with nothing to return |
 | `422` | Unknown `basis` on the ledger, or an unknown `day` on `/fixtures` — a typo, not a query with no results |
 | `502` | StatPitch unreachable, or refused with a reason code |
-| `503` | The Odds API key is missing, or its quota is exhausted |
+| `503` | The Odds API key is missing, or its quota is exhausted (scores) |
 
 A StatPitch refusal is a 200 upstream but a **502 here**: `NO_FIXTURE_SOURCE`
 means its fixture artifact failed to load, which is a broken deploy rather than

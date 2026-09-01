@@ -146,25 +146,46 @@ def test_an_icon_reaches_a_cached_fixture_immediately(
     assert after["competition_icon_url"] == icon
 
 
-def test_the_competition_costs_no_extra_query(engine, make_fixture, seed_fixtures):
-    """Joined with the clubs, so a fixture list stays one statement."""
+def test_reading_a_fixture_list_costs_a_fixed_number_of_queries(
+    engine, make_fixture, seed_fixtures
+):
+    """The clubs and the competition are joined; the selections are `selectin`.
+
+    So a fixture list is two statements, not one — but two regardless of how
+    many fixtures are in it, which is the property that actually matters. The
+    count is asserted as *constant across page size* rather than as a literal,
+    because a literal only ever catches the change and never the regression:
+    an N+1 introduced here would still read as "one more query" at five rows.
+
+    The selections deliberately are not joined. A joined collection beside two
+    joined clubs and a joined competition multiplies every fixture row by its
+    selection count, which is a worse trade than one extra statement.
+    """
     from sqlalchemy import event
 
     from api.statpitch.models import StatPitchFixture
 
-    seed_fixtures(*[make_fixture() for _ in range(5)])
+    def queries_for(n: int) -> tuple[int, int]:
+        seed_fixtures(*[make_fixture() for _ in range(n)])
+        count = {"n": 0}
+        handler = lambda *a, **k: count.__setitem__("n", count["n"] + 1)  # noqa: E731
+        event.listen(engine, "before_cursor_execute", handler)
+        try:
+            with Session(engine) as db:
+                rows = db.exec(select(StatPitchFixture)).all()
+                _ = [
+                    (row.competition_name, row.home_team, row.away_team, row.selections)
+                    for row in rows
+                ]
+        finally:
+            event.remove(engine, "before_cursor_execute", handler)
+        return len(rows), count["n"]
 
-    count = {"n": 0}
-    event.listen(
-        engine, "before_cursor_execute", lambda *a, **k: count.__setitem__("n", count["n"] + 1)
-    )
+    five, cost_of_five = queries_for(5)
+    twenty, cost_of_twenty = queries_for(15)
 
-    with Session(engine) as db:
-        rows = db.exec(select(StatPitchFixture)).all()
-        _ = [(row.competition_name, row.home_team, row.away_team) for row in rows]
-
-    assert len(rows) == 5
-    assert count["n"] == 1
+    assert (five, twenty) == (5, 20)
+    assert cost_of_five == cost_of_twenty
 
 
 def test_a_fixture_cannot_name_a_competition_that_does_not_exist(engine, make_fixture):

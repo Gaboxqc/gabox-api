@@ -15,7 +15,7 @@ three-day retention policy at all.
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic import Field as PydanticField
 from sqlalchemy import Column, UniqueConstraint
 from sqlalchemy.types import JSON
@@ -32,7 +32,11 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle, resolved at runtime
 # asks clients to ignore unknown ones rather than validate against a closed
 # schema. Every model here is therefore extra="ignore".
 
-_IGNORE_EXTRA = ConfigDict(extra="ignore", populate_by_name=True)
+# `protected_namespaces=()` because StatPitch publishes `model_version`,
+# `model_edge` and `model_odds`. Pydantic reserves the `model_` prefix for its
+# own methods and warns on every one of them; the fields are upstream's names
+# and cannot be renamed without breaking the mapping.
+_IGNORE_EXTRA = ConfigDict(extra="ignore", populate_by_name=True, protected_namespaces=())
 
 
 class SPProbabilities(BaseModel):
@@ -159,6 +163,262 @@ class SPHealth(BaseModel):
 
 
 # ==============================================================================
+# STATPITCH PRICING AND SELECTION
+# ==============================================================================
+# StatPitch prices its own card now, against a 25-book panel it did not have
+# before. These are the shapes behind `/bets/today`, `/card/upcoming` and
+# `/odds/matchday`.
+#
+# Captured against config `dec-2026.08.1-experimental`, schema_version 1, on
+# 2026-09-01. Three fields the integration contract describes — `selection_basis`,
+# `pricing` and `model_odds` — are **not published by the live service yet**.
+# They are declared here as optional so the day they ship the sync fills them
+# with no migration and no code change, and null until then. Nothing infers
+# them: a guessed `pricing` would be the one field capable of turning our own
+# opinion into a price we claim a bookmaker offered.
+
+
+class SPSelection(BaseModel):
+    """One priced, graded selection.
+
+    The same shape in `bets[]`, in `assessments[]` and inside a matchday
+    `markets` family, which is why it is one class and not three.
+
+    The four prices are kept apart on purpose and must never be collapsed:
+    `reference_odds` is the benchmark book the rule measures against,
+    `consensus_odds` the panel mean, `fair_odds` that consensus de-vigged, and
+    `odds` the best quote — the only one of the four anybody can actually bet.
+    """
+
+    model_config = _IGNORE_EXTRA
+
+    fixture_id: str
+    competition_id: str | None = None
+    # Present on every selection row, which is what lets a price be joined to a
+    # fixture by name-free identity rather than by fuzzy matching.
+    home_team: str | None = None
+    away_team: str | None = None
+
+    # "1x2_home" | "1x2_draw" | "1x2_away" — see `selections.STATPITCH_TO_OURS`.
+    selection: str
+    market_family: str
+    # The handicap or totals line. Null on 1X2, which is the only family the
+    # service currently publishes.
+    line: float | None = None
+    description: str | None = None
+
+    # ── The prices, deliberately never merged ────────────────────────────────
+    reference_odds: float | None = None
+    consensus_odds: float | None = None
+    odds: float | None = None
+    fair_odds: float | None = None
+
+    # ── Probabilities ────────────────────────────────────────────────────────
+    p_model: float | None = None
+    q_fair: float | None = None
+    # What the staking actually used. Equals `q_fair` while the market-shrinkage
+    # weight fits at 0.000, which is why `model_edge` is zero on every row.
+    p_used: float | None = None
+
+    # ── Edges, decomposed and never summed ───────────────────────────────────
+    edge_prob: float | None = None
+    expected_value: float | None = None
+    price_edge: float | None = None
+    model_edge: float | None = None
+    # Best quote against the benchmark book. This is what drives selection.
+    rule_edge: float | None = None
+
+    rule_qualified: bool = False
+    grade: str | None = None
+    composite: float | None = None
+    # 0.0 means assessed, not recommended. The card's own note names this as
+    # the field that separates analysis from recommendation.
+    stake_fraction: float = 0.0
+    # Why this selection was refused, in readable prose. Empty on a bet.
+    reasons: list[str] = []
+
+    # Not published as of 2026-09-01 — see the note above this section.
+    selection_basis: str | None = None
+    pricing: str | None = None
+    model_odds: float | None = None
+
+    @property
+    def recommended(self) -> bool:
+        """Whether this row is a pick rather than an assessment.
+
+        Derived from the stake rather than read from the matchday payload's own
+        `recommended` list, whose element type cannot be told from the empty
+        list the service currently returns. `stake_fraction` is documented
+        upstream as the discriminator, so it is the one to trust.
+        """
+        return self.stake_fraction > 0
+
+
+class SPSelectionRule(BaseModel):
+    """The rule that decided the card, and how much it has been measured.
+
+    `status` is the field that has to survive onto every stored row: when the
+    rule is promoted to `fitted`, history must still show what it was
+    recommended under.
+    """
+
+    model_config = _IGNORE_EXTRA
+
+    # experimental | candidate | fitted
+    status: str | None = None
+    # The benchmark book, e.g. `odds_pinnacle`. Worth storing: the live feed
+    # does not currently carry Pinnacle, and the candidate reference is an
+    # exchange, so this is not a constant.
+    reference: str | None = None
+    threshold: float | None = None
+    market_families: list[str] = []
+    max_per_day: int | None = None
+    evidence: str | None = None
+
+
+class SPEmptyBecause(BaseModel):
+    """Why a day produced no bet. A quiet day, not a failure."""
+
+    model_config = _IGNORE_EXTRA
+
+    card_dates: list[date] = []
+    fixtures_today: int = 0
+    card_covers_today: bool = False
+    cause: str | None = None
+    note: str | None = None
+
+
+class SPBetsToday(BaseModel):
+    """`GET /bets/today` — the daily pick, or a reasoned absence.
+
+    Note `refusal`: unlike the one on `/fixtures/upcoming`, this is **not
+    fatal**. It carries `SELECTION_RULE_EXPERIMENTAL`, which is a standing
+    statement about the rule's calibration rather than a broken deploy — it is
+    present on every response while the rule is experimental, and the card
+    returns real bets alongside it. Treating it the way the fixtures refusal is
+    treated would fail every sync.
+    """
+
+    model_config = _IGNORE_EXTRA
+
+    # Aliased rather than named `date`: assigning a default to a field of that
+    # name shadows the `date` type inside the class body, and the annotation
+    # then evaluates to `None | None`.
+    for_date: date | None = PydanticField(default=None, alias="date")
+    bets: list[SPSelection] = []
+    count: int = 0
+    total_exposure: float = 0.0
+    assessed: int = 0
+    qualified_by_rule: int = 0
+    selection_rule: SPSelectionRule = SPSelectionRule()
+    config_status: str | None = None
+
+    # The strings that have to reach the reader. `caveat` explains what the
+    # rule's status means; `confidence_caveat` is not published yet.
+    caveat: str | None = None
+    confidence_caveat: str | None = None
+    disclaimer: str | None = None
+
+    by_basis: dict[str, int] = {}
+    # Why the day is empty. `/card/today` names it `binding_constraint`;
+    # `/bets/today` says it in `reason` plus the structured `empty_because`.
+    binding_constraint: str | None = None
+    empty_because: SPEmptyBecause | None = None
+    reason: str | None = None
+    refusal: SPRefusal | None = None
+
+    model_version: str | None = None
+    config_version: str | None = None
+    generated_at: datetime | None = None
+
+
+class SPCard(BaseModel):
+    """`GET /card/upcoming` — the forward slate, and the sync source.
+
+    Returns both the recommendations and everything priced and graded, so one
+    call fills a whole fixtures view. `/card/today` is deliberately not used:
+    prices publish days ahead, so on a quiet day it returns nothing while a
+    full slate sits in the card.
+    """
+
+    model_config = _IGNORE_EXTRA
+
+    # `from` is a Python keyword, so both dates are aliased.
+    from_date: date | None = PydanticField(default=None, alias="from")
+    to_date: date | None = PydanticField(default=None, alias="to")
+
+    bets: list[SPSelection] = []
+    assessments: list[SPSelection] = []
+    assessed: int = 0
+    total_exposure: float = 0.0
+    grades: dict[str, int] = {}
+    dates_covered: list[date] = []
+    reason: str | None = None
+    note: str | None = None
+    card_generated_at: datetime | None = None
+    disclaimer: str | None = None
+
+    model_version: str | None = None
+    config_version: str | None = None
+    generated_at: datetime | None = None
+
+
+class SPMatchdayFixture(BaseModel):
+    """One fixture's prices, grouped by market family."""
+
+    model_config = _IGNORE_EXTRA
+
+    fixture_id: str
+    competition_id: str | None = None
+    home_team: str | None = None
+    away_team: str | None = None
+    # "2026-09-02 18:45:00" — space-separated and without an offset, but
+    # documented UTC by its own name. This is the real instant the whole
+    # local-day bucket depends on, and the only source of one now that we no
+    # longer fetch bookmaker odds for the schedule.
+    kickoff_utc: datetime | None = None
+
+    markets: dict[str, list[SPSelection]] = {}
+    markets_priced: list[str] = []
+
+    @field_validator("kickoff_utc")
+    @classmethod
+    def _as_utc(cls, value: datetime | None) -> datetime | None:
+        """Attach UTC to the naive timestamp rather than letting it drift.
+
+        `to_local_date` would read a naive value as UTC anyway, but leaving it
+        naive means anything else that touches it has to know that rule too.
+        """
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
+
+class SPMatchdayOdds(BaseModel):
+    """`GET /odds/matchday` — a day's prices, per fixture.
+
+    1X2 is captured daily for every competition; totals and handicaps only for
+    competitions playing that day, because the price API bills per market per
+    competition. `markets_priced` says which arrived.
+    """
+
+    model_config = _IGNORE_EXTRA
+
+    # Aliased for the same reason as `SPBetsToday.for_date`.
+    for_date: date | None = PydanticField(default=None, alias="date")
+    fixtures: list[SPMatchdayFixture] = []
+    count: int = 0
+    selections: int = 0
+    note: str | None = None
+    card_generated_at: datetime | None = None
+    disclaimer: str | None = None
+
+    model_version: str | None = None
+    config_version: str | None = None
+    generated_at: datetime | None = None
+
+
+# ==============================================================================
 # SELECTIONS
 # ==============================================================================
 
@@ -178,10 +438,18 @@ Selection = Literal[
     "btts_no",
 ]
 
-# Which of the two parallel track records a ledger row belongs to.
-#   "1x2"     — the best 1X2 pick only
-#   "overall" — the best Kelly-filtered pick across every market
-BetBasis = Literal["1x2", "overall"]
+# Which parallel track record a ledger row belongs to.
+#   "1x2"     — our best 1X2 pick only
+#   "overall" — our best Kelly-filtered pick across every market
+#   "rule"    — StatPitch's own selection rule, staked by StatPitch
+#
+# The contract also describes a "confidence" tier — the most likely outcome on
+# a day nothing cleared the rule, measured at -2.12% ROI and flat-staked. It is
+# deliberately absent here: the live service publishes no `selection_basis`, so
+# nothing would ever be tagged with it and the series would read as a permanent
+# empty window rather than as a tier that has not shipped. Add it when a row
+# arrives carrying it.
+BetBasis = Literal["1x2", "overall", "rule"]
 
 
 # ==============================================================================
@@ -364,6 +632,26 @@ class StatPitchFixture(SQLModel, table=True):
         }
     )
 
+    # StatPitch's own priced selections for this fixture.
+    #
+    # `selectin` rather than `joined`, unlike every relationship above it. Those
+    # are all many-to-one and add a column; this is a collection, and joining it
+    # beside two joined clubs and a joined competition would multiply every
+    # fixture row by its selection count and make the others arrive three times
+    # over. `selectin` costs one extra query for the whole page instead.
+    #
+    # `viewonly` because the sync writes these explicitly, in its own upsert,
+    # after the fixture exists — not by cascading off this attribute.
+    selections: list["StatPitchSelection"] = Relationship(
+        sa_relationship_kwargs={
+            "primaryjoin": "StatPitchFixture.fixture_id == StatPitchSelection.fixture_id",
+            "foreign_keys": "StatPitchSelection.fixture_id",
+            "order_by": "StatPitchSelection.selection",
+            "lazy": "selectin",
+            "viewonly": True,
+        }
+    )
+
     @property
     def competition_name(self) -> str:
         return self.competition.name
@@ -421,6 +709,169 @@ class StatPitchFixture(SQLModel, table=True):
 
 
 # ==============================================================================
+# STATPITCH'S OWN SELECTIONS  (pruned with the fixture)
+# ==============================================================================
+
+
+class StatPitchSelection(SQLModel, table=True):
+    """One StatPitch-priced selection, stored as it arrived.
+
+    A separate table rather than more columns on the fixture. Each selection
+    carries four prices, three probabilities and five edges; across even the
+    three 1X2 outcomes that is fifty columns, and the fixture row is already
+    the widest thing in the schema.
+
+    Keyed on `(fixture_id, selection)` and refreshed in place, which departs
+    from the contract's suggested `(fixture_id, selection, captured_at)`. That
+    key is for a system keeping price history; this table is a cache that is
+    pruned with its fixture after three days, and the permanent record lives in
+    `statpitch_settled_bet`. `captured_at` is kept as a column so the age of a
+    price is still legible — it is just not part of the identity.
+    """
+
+    __tablename__: str = "statpitch_selection"
+    __table_args__ = (UniqueConstraint("fixture_id", "selection", name="uq_statpitch_selection"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    # CASCADE, unlike the ledger's RESTRICT: these rows are cache. When the
+    # fixture is pruned they should go with it rather than hold it back.
+    fixture_id: str = Field(
+        foreign_key="statpitch_fixture.fixture_id", ondelete="CASCADE", index=True
+    )
+
+    # StatPitch's own name, stored verbatim — "1x2_home", not "home_win".
+    selection: str = Field(index=True)
+    # Ours, from `selections.translate`. Null when we have no name for it, which
+    # is how a selection ends up displayed but never priced or settled.
+    our_selection: str | None = Field(default=None, index=True)
+    market_family: str = Field(index=True)
+    line: float | None = Field(default=None)
+    description: str | None = Field(default=None)
+
+    # ── The four prices, never merged ─────────────────────────────────────────
+    # `odds` is the only one anybody can bet. `fair_odds` and `model_odds` are
+    # opinions, and `reference_odds` is a benchmark, not an offer.
+    reference_odds: float | None = Field(default=None)
+    consensus_odds: float | None = Field(default=None)
+    odds: float | None = Field(default=None)
+    fair_odds: float | None = Field(default=None)
+
+    # ── Probabilities ─────────────────────────────────────────────────────────
+    p_model: float | None = Field(default=None)
+    q_fair: float | None = Field(default=None)
+    p_used: float | None = Field(default=None)
+
+    # ── Edges, decomposed ─────────────────────────────────────────────────────
+    edge_prob: float | None = Field(default=None)
+    expected_value: float | None = Field(default=None)
+    price_edge: float | None = Field(default=None)
+    # Zero on every row while the shrinkage weight fits at 0.000. Stored anyway:
+    # the day it is non-zero is the day the model starts picking.
+    model_edge: float | None = Field(default=None)
+    rule_edge: float | None = Field(default=None)
+
+    rule_qualified: bool = Field(default=False, index=True)
+    grade: str | None = Field(default=None)
+    composite: float | None = Field(default=None)
+    # 0.0 means assessed, not recommended.
+    stake_fraction: float = Field(default=0.0, index=True)
+    reasons: list[str] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+
+    # ── Per-row provenance ────────────────────────────────────────────────────
+    # On the row, never once per sync. When the rule is promoted to `fitted`,
+    # a historical row must still show what it was recommended under — and a
+    # column filled at read time from today's status could not do that.
+    config_status: str | None = Field(default=None)
+    selection_rule_status: str | None = Field(default=None)
+    # The benchmark book. Not a constant: the live feed does not currently carry
+    # Pinnacle and the candidate reference is an exchange.
+    selection_rule_reference: str | None = Field(default=None)
+
+    # Not published upstream as of 2026-09-01. Nullable rather than inferred.
+    selection_basis: str | None = Field(default=None, index=True)
+    pricing: str | None = Field(default=None, index=True)
+    model_odds: float | None = Field(default=None)
+
+    # When StatPitch built the card this came from, not when we stored it.
+    captured_at: datetime | None = Field(default=None)
+    synced_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def bettable(self) -> bool:
+        """Whether `odds` is a price somebody is actually offering.
+
+        While `pricing` is unpublished this can only be answered by the price
+        being present at all. Once upstream ships the field, a `model` row is
+        excluded here — its `odds` is `1 / p_model`, our own opinion wearing a
+        price's clothes.
+        """
+        if self.odds is None or self.odds <= 1:
+            return False
+        return self.pricing != "model"
+
+
+# ==============================================================================
+# THE DAILY PICK  (one row per local day, pruned with the window)
+# ==============================================================================
+
+
+class StatPitchBetDay(SQLModel, table=True):
+    """What `/bets/today` said about one day, cached.
+
+    The caveats are the reason this table exists. They are day-level strings
+    with no home on a fixture row, and they are not decoration: a reader shown
+    a pick without the caveat that qualifies it has been told something untrue.
+    Caching them means they still serve when the upstream free instance is
+    asleep, which is the moment they would otherwise go missing.
+    """
+
+    __tablename__: str = "statpitch_bet_day"
+    __table_args__ = (UniqueConstraint("match_date", name="uq_statpitch_bet_day_date"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    # Nicaragua-local day, matching every other date in the module.
+    match_date: date = Field(index=True)
+
+    count: int = Field(default=0)
+    assessed: int = Field(default=0)
+    qualified_by_rule: int = Field(default=0)
+    total_exposure: float = Field(default=0.0)
+
+    # ── The strings that have to reach the reader ─────────────────────────────
+    caveat: str | None = Field(default=None)
+    # Not published upstream yet. When it is, it accompanies every tier-2 pick
+    # and naming it here means the sync stores it without a migration.
+    confidence_caveat: str | None = Field(default=None)
+    disclaimer: str | None = Field(default=None)
+    # Why the day is empty, when it is. An empty day is a normal answer.
+    reason: str | None = Field(default=None)
+    binding_constraint: str | None = Field(default=None)
+    empty_because: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+
+    # ── Provenance ────────────────────────────────────────────────────────────
+    config_status: str | None = Field(default=None)
+    selection_rule_status: str | None = Field(default=None)
+    selection_rule: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    by_basis: dict[str, int] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+
+    # The advisory refusal, which is a caveat rather than a failure. Stored so
+    # its reason code is visible without re-deriving it from prose.
+    refusal_reason_code: str | None = Field(default=None)
+    refusal_reason: str | None = Field(default=None)
+
+    model_version: str | None = Field(default=None)
+    config_version: str | None = Field(default=None)
+    generated_at: datetime | None = Field(default=None)
+    synced_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+# ==============================================================================
 # SETTLED BET LEDGER  (permanent)
 # ==============================================================================
 
@@ -475,6 +926,16 @@ class StatPitchSettledBet(SQLModel, table=True):
     # Which model produced the probability. Predictions are immutable: a
     # retrain writes new rows rather than reinterpreting settled ones.
     model_version: str
+
+    # ── Provenance, for rows that came from StatPitch's own rule ──────────────
+    # Null on our own `1x2` and `overall` rows, which are priced here and owe
+    # nothing to an upstream rule. On a `rule` row these are what the bet was
+    # recommended under, frozen at settlement: when the rule is promoted to
+    # `fitted`, everything already banked must still read as experimental.
+    selection_basis: str | None = Field(default=None)
+    pricing: str | None = Field(default=None)
+    config_status: str | None = Field(default=None)
+    selection_rule_status: str | None = Field(default=None)
 
     home: "StatPitchTeam" = Relationship(
         sa_relationship_kwargs={
@@ -596,6 +1057,122 @@ class FixtureRead(SQLModel):
     actual_result: str | None
 
 
+class SelectionRead(SQLModel):
+    """One StatPitch-priced selection, as a client sees it.
+
+    Every price is exposed separately and none is presented as *the* price.
+    That is the point: `odds` is the best quote and the only bettable number,
+    `reference_odds` is the benchmark the rule measured against,
+    `consensus_odds` is the panel mean and `fair_odds` is that mean de-vigged.
+    Collapsing them into one figure would throw away the only evidence a reader
+    has for whether a price is actually good.
+    """
+
+    model_config = ConfigDict(from_attributes=True)  # type: ignore[assignment]
+
+    selection: str
+    our_selection: str | None
+    market_family: str
+    line: float | None
+    description: str | None
+
+    reference_odds: float | None
+    consensus_odds: float | None
+    odds: float | None
+    fair_odds: float | None
+
+    p_model: float | None
+    q_fair: float | None
+    p_used: float | None
+
+    expected_value: float | None
+    price_edge: float | None
+    model_edge: float | None
+    rule_edge: float | None
+
+    rule_qualified: bool
+    grade: str | None
+    # 0.0 means assessed, not recommended. The field that separates analysis
+    # from a recommendation, and the one to filter on.
+    stake_fraction: float
+    # Why it was refused, in readable prose. Empty on a pick.
+    reasons: list[str] | None
+
+    # Per-row provenance, so a row still reads as what it was recommended under
+    # after the rule is promoted.
+    config_status: str | None
+    selection_rule_status: str | None
+    selection_rule_reference: str | None
+
+    # Null until StatPitch publishes them; see the SP section above.
+    selection_basis: str | None
+    pricing: str | None
+    model_odds: float | None
+
+    captured_at: datetime | None
+
+
+class BetPickRead(SelectionRead):
+    """A staked selection, with enough of its fixture to render on its own.
+
+    `/bets/today` is read without a fixture list beside it, so the clubs and the
+    kickoff travel with the pick rather than being looked up separately.
+    """
+
+    fixture_id: str
+    competition_id: str
+    competition_name: str
+    competition_short_name: str
+    competition_icon_url: str | None
+    home_team: str
+    away_team: str
+    home_crest_url: str | None
+    away_crest_url: str | None
+    match_date: date
+    commence_time: datetime | None
+
+
+class BetsTodayRead(SQLModel):
+    """Today's pick, or a reasoned absence — served from cache.
+
+    `caveat` is not decoration and is never null while a pick is present. A
+    reader shown a recommendation without the statement qualifying it has been
+    told something untrue, so the endpoint synthesises one from the stored rule
+    status rather than return a pick bare. Render it.
+    """
+
+    match_date: date
+
+    bets: list[BetPickRead]
+    count: int
+    assessed: int
+    qualified_by_rule: int
+    total_exposure: float
+
+    # Always present when `bets` is non-empty.
+    caveat: str | None
+    # Not published upstream yet. When it is, it accompanies every tier-2 pick
+    # and must be rendered beside one.
+    confidence_caveat: str | None
+    disclaimer: str | None
+
+    # Why the day is empty, when it is. An empty day is a normal answer here,
+    # not a failure — most days produce no qualifying bet at all.
+    reason: str | None
+    binding_constraint: str | None
+    empty_because: dict[str, Any] | None
+
+    by_basis: dict[str, int] | None
+    selection_rule: dict[str, Any] | None
+    config_status: str | None
+    selection_rule_status: str | None
+
+    model_version: str | None
+    config_version: str | None
+    generated_at: datetime | None
+    synced_at: datetime | None
+
+
 class CompetitionRead(SQLModel):
     """One competition, for filter chips and headings.
 
@@ -670,7 +1247,10 @@ class StatsRead(SQLModel):
     date_confirmed_today: int
     high_confidence_today: int
     high_confidence_threshold: float
+    # Our own Kelly picks, and StatPitch's staked rule selections. Counted
+    # apart because they are two different strategies, not two views of one.
     value_bets_today: int
+    rule_bets_today: int = 0
 
     roi: list[BasisRoi]
 
@@ -680,7 +1260,13 @@ class SyncResultRead(SQLModel):
     fetched: int
     stored: int
     priced: int
-    unmatched_odds: int
+    # Renamed from `unmatched_odds`, which described a name-matching failure
+    # that can no longer happen: prices arrive keyed by `fixture_id`. A fixture
+    # is unpriced because the feed has not published its matchday block yet.
+    unpriced: int
+    # StatPitch selection rows stored, and how many of them it staked.
+    selections: int = 0
+    rule_bets: int = 0
     settled: int
     ledgered: int
     pruned: int

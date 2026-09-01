@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 import httpx
 
 from api.statpitch.leagues import sport_key_for
-from api.statpitch.odds_service import OddsUnavailable, _api_key
+from api.statpitch.odds_api import OddsUnavailable, api_key
 
 log = logging.getLogger("statpitch.scores")
 
@@ -90,7 +90,7 @@ async def fetch_scores(competitions: set[str], days_back: int = 2) -> ScoresFetc
             try:
                 response = await client.get(
                     f"{_ODDS_API_BASE}/sports/{sport_key}/scores/",
-                    params={"apiKey": _api_key(), "daysFrom": days_from},
+                    params={"apiKey": api_key(), "daysFrom": days_from},
                 )
                 if response.status_code in (401, 403):
                     raise OddsUnavailable(
