@@ -28,7 +28,7 @@ from typing import Any, Literal
 from sqlmodel import SQLModel
 
 from api.statpitch.accounts.models import Tier
-from api.statpitch.models import StatPitchFixture
+from api.statpitch.models import SelectionRead, StatPitchFixture
 from api.statpitch.tiers import Feature, allows
 
 
@@ -166,6 +166,16 @@ class FixtureFullRead(FixtureFreeRead):
     best_overall_prob: float | None
     best_overall_ev: float | None
     best_overall_kelly: float | None
+
+    # StatPitch's own priced selections, one row per outcome, with the four
+    # prices kept apart. This is the "Market breakdown (Book vs ML)" line on the
+    # pricing page in its fullest form: `odds` is what a book is offering,
+    # `reference_odds` what the benchmark says, and `p_model` against `q_fair`
+    # is the model set beside the market.
+    #
+    # Empty rather than absent when a fixture is unpriced, which is normal days
+    # ahead of kickoff — the price feed publishes per matchday block.
+    selections: list[SelectionRead] = []
 
 
 # The paid shape needs every one of these; a tier missing any of them gets the

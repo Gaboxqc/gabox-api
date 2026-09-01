@@ -240,9 +240,31 @@ whenever this is false.
 
 **`commence_time` vs `kickoff`** — `kickoff` is a bare `"19:00"` with no
 timezone and cannot be converted to a local day. `commence_time` is a real UTC
-instant from the odds feed, and is what `match_date` is derived from. It is null
-when the fixture could not be matched to an odds event, and `match_date` then
-falls back to StatPitch's nominal `source_date`.
+instant, taken from `kickoff_utc` on StatPitch's `/odds/matchday`, and is what
+`match_date` is derived from. It is null for a fixture that endpoint has not
+published yet, and `match_date` then falls back to StatPitch's nominal
+`source_date`.
+
+**`selections`** — Pro and above. StatPitch's own priced rows for this fixture,
+one per outcome, and the fullest form of "Book vs ML". The four prices are
+deliberately separate and must not be collapsed into one:
+
+| Field | What it is |
+|---|---|
+| `odds` | The best quote. **The only bettable number of the four** |
+| `reference_odds` | The benchmark book the rule measured against |
+| `consensus_odds` | The panel mean |
+| `fair_odds` | That consensus, de-vigged |
+
+`stake_fraction` separates analysis from recommendation: everything in the list
+has been priced and graded, and only rows above zero are picks. `reasons` says
+why a row was refused, in readable prose. The list is empty rather than absent
+on an unpriced fixture, which is normal days ahead of kickoff.
+
+Note `model_edge` is `0.0` on every row today, and `p_used` equals `q_fair`: the
+market-shrinkage weight fits at 0.000, so selections come from a *price*
+disagreement between a book and the benchmark, not from the model out-predicting
+the market. **Do not label one a "model pick".**
 
 **`fully_rated`** — `false` means at least one club had no measured Elo and fell
 back to a prior. The number is still well formed, but it is a much weaker claim.
@@ -281,7 +303,8 @@ All under `/statpitch`. `GET` is public; the sync needs `X-API-KEY`.
 | `GET` | `/fixtures/window` | The three live dates |
 | `GET` | `/fixtures/yesterday` \| `/today` \| `/tomorrow` | One day each |
 | `GET` | `/fixtures/today/best` | Highest win probability |
-| `GET` | `/fixtures/today/value-bets` | Positive edge, best Kelly first |
+| `GET` | `/fixtures/today/value-bets` | Positive edge, strongest stake first |
+| `GET` | `/bets/today` | StatPitch's own pick, with its caveats |
 | `GET` | `/fixtures/{id}` | By numeric primary key |
 | `GET` | `/stats` | Today's shape plus rolling ROI |
 | `GET` | `/ledger` | The permanent record, paginated |
@@ -301,16 +324,49 @@ complete day.
 
 ### `GET /fixtures/today/value-bets`
 
-Only fixtures whose best selection clears the minimum fractional Kelly, ordered
-by Kelly descending. Ranking on Kelly rather than EV is deliberate: EV alone
-cannot tell a sound bet from a lottery ticket, since a 5% shot at 25.0 carries
-+25% EV and a stake far too small to be worth the variance.
+| Parameter | Type | Default |
+|---|---|---|
+| `basis` | `overall` \| `1x2` \| `rule` | `overall` |
+
+`overall` and `1x2` are **our** selections: fixtures whose best pick clears the
+minimum fractional Kelly, ordered by Kelly descending. Ranking on Kelly rather
+than EV is deliberate — EV alone cannot tell a sound bet from a lottery ticket,
+since a 5% shot at 25.0 carries +25% EV and a stake far too small to be worth
+the variance.
+
+`rule` is **StatPitch's** own selection rule instead, ordered by the stake it
+assigned. It is not the default and will not become one: this endpoint has been
+measuring our Kelly selections since it existed, and repointing it would rewrite
+what its numbers have always meant. An unknown `basis` is a 422.
+
+### `GET /bets/today`
+
+StatPitch's own daily pick, served from cache rather than proxied — the upstream
+instance sleeps after fifteen minutes idle, and a proxied read would drop the
+caveats at exactly the moment somebody is looking at a bet.
+
+**`caveat` is never null while `bets` is non-empty, and has to be rendered.**
+The rule behind these picks carries five seasons of measured closing-line value
+(+0.51%, t=7.53, 7,790 matches) but runs on a 25-book panel that has none, so
+its calibration is inherited rather than re-measured. A pick shown without that
+statement claims more than the evidence supports. If the upstream string is
+somehow missing, one is built from the rule status stored on the pick itself, so
+there is no path where a recommendation arrives unqualified.
+
+An empty day is a `200`, not a `404`. The rule fires only where a book misprices
+against its benchmark, which on most days is nowhere at all — `reason` and
+`empty_because` say which. Note that `empty_because.cause` is frequently
+`fixtures_today_carry_no_price`: prices publish per matchday block, so a day can
+have fixtures and no card.
+
+Pro and above. A staked recommendation *is* the edge indicator, so there is no
+reduced free version worth returning.
 
 ### `GET /ledger`
 
 | Parameter | Type | Default |
 |---|---|---|
-| `basis` | `1x2` \| `overall` | both |
+| `basis` | `1x2` \| `overall` \| `rule` | both |
 | `competition_id` | string | all |
 | `offset` | int >= 0 | `0` |
 | `limit` | int 1-100 | `10` |
@@ -366,6 +422,7 @@ and both promise a single resource.
   "high_confidence_today": 0,
   "high_confidence_threshold": 0.7,
   "value_bets_today": 1,
+  "rule_bets_today": 1,
   "roi": [
     {
       "basis": "1x2",
@@ -374,22 +431,40 @@ and both promise a single resource.
       "month": { "bets": 1, "wins": 1, "staked_units": 1.0, "returned_units": 1.45,
                  "pnl_units": 0.45, "roi_pct": 45.0, "hit_rate_pct": 100.0 }
     },
-    { "basis": "overall", "week": {}, "month": {} }
+    { "basis": "overall", "week": {}, "month": {} },
+    { "basis": "rule", "week": {}, "month": {} }
   ]
 }
 ```
 
-### Two series, never averaged
+`value_bets_today` counts our Kelly picks; `rule_bets_today` counts StatPitch's
+staked selections. A fixture can easily carry one and not the other.
 
-`roi` always has exactly two entries, and they measure **different strategies**:
+### Three series, never averaged
 
-| basis | what it bets |
-|---|---|
-| `1x2` | The best home/draw/away pick only |
-| `overall` | The best pick across 1X2, over/under and BTTS |
+`roi` always has exactly three entries, and they measure **different
+strategies**:
 
-They are kept apart so you can see whether the multi-market Kelly filter
-actually beats plain 1X2. Averaging them would answer neither question.
+| basis | whose selection | what it bets |
+|---|---|---|
+| `1x2` | Ours | The best home/draw/away pick only |
+| `overall` | Ours | The best pick across 1X2, over/under and BTTS |
+| `rule` | StatPitch's | Its own selection rule, at its own price and probability |
+
+The first two are kept apart so you can see whether the multi-market Kelly
+filter actually beats plain 1X2. The third is kept apart from both because it is
+not our selection at all: it is measured at StatPitch's `p_used` and its own
+quote, and scoring it against our inputs would measure neither system.
+Averaging any of them would answer none of the three questions.
+
+Two things to know about reading these today:
+
+- **`1x2` and `overall` currently agree.** Only the 1X2 family carries a price,
+  so the across-markets pick and the confined one are the same row every time.
+  Their two figures will read identically until totals ship upstream, and the
+  gap between them is not evidence of anything meanwhile.
+- **`rule` accrues slowly.** At most three bets a day across all competitions,
+  and most days none — so expect long stretches where its window is `null`.
 
 ### What the numbers mean
 

@@ -20,6 +20,7 @@ from api.statpitch.clock import current_window, today_local
 from api.statpitch.models import (
     BasisRoi,
     StatPitchFixture,
+    StatPitchSelection,
     StatPitchSettledBet,
     StatsRead,
     ThreeDayWindow,
@@ -100,6 +101,22 @@ def build_stats(session: Session) -> StatsRead:
         )
     ).one()
 
+    # StatPitch's own staked selections for today. Counted from the selection
+    # table rather than inferred from our `best_overall_bet`, because the two
+    # are different strategies and a fixture can easily carry one and not the
+    # other.
+    rule_bets = session.exec(
+        select(func.count(StatPitchSelection.id))
+        .join(
+            StatPitchFixture,
+            StatPitchSelection.fixture_id == StatPitchFixture.fixture_id,
+        )
+        .where(
+            StatPitchFixture.match_date == window.today,
+            StatPitchSelection.stake_fraction > 0,
+        )
+    ).one()
+
     return StatsRead(
         generated_for=window.today,
         timezone=settings.statpitch_timezone,
@@ -120,6 +137,7 @@ def build_stats(session: Session) -> StatsRead:
         ),
         high_confidence_threshold=HIGH_CONFIDENCE_THRESHOLD,
         value_bets_today=sum(1 for f in today_fixtures if f.best_overall_bet is not None),
+        rule_bets_today=int(rule_bets or 0),
         roi=[
             BasisRoi(
                 basis=basis,

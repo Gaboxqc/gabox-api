@@ -632,6 +632,26 @@ class StatPitchFixture(SQLModel, table=True):
         }
     )
 
+    # StatPitch's own priced selections for this fixture.
+    #
+    # `selectin` rather than `joined`, unlike every relationship above it. Those
+    # are all many-to-one and add a column; this is a collection, and joining it
+    # beside two joined clubs and a joined competition would multiply every
+    # fixture row by its selection count and make the others arrive three times
+    # over. `selectin` costs one extra query for the whole page instead.
+    #
+    # `viewonly` because the sync writes these explicitly, in its own upsert,
+    # after the fixture exists — not by cascading off this attribute.
+    selections: list["StatPitchSelection"] = Relationship(
+        sa_relationship_kwargs={
+            "primaryjoin": "StatPitchFixture.fixture_id == StatPitchSelection.fixture_id",
+            "foreign_keys": "StatPitchSelection.fixture_id",
+            "order_by": "StatPitchSelection.selection",
+            "lazy": "selectin",
+            "viewonly": True,
+        }
+    )
+
     @property
     def competition_name(self) -> str:
         return self.competition.name
@@ -1037,6 +1057,122 @@ class FixtureRead(SQLModel):
     actual_result: str | None
 
 
+class SelectionRead(SQLModel):
+    """One StatPitch-priced selection, as a client sees it.
+
+    Every price is exposed separately and none is presented as *the* price.
+    That is the point: `odds` is the best quote and the only bettable number,
+    `reference_odds` is the benchmark the rule measured against,
+    `consensus_odds` is the panel mean and `fair_odds` is that mean de-vigged.
+    Collapsing them into one figure would throw away the only evidence a reader
+    has for whether a price is actually good.
+    """
+
+    model_config = ConfigDict(from_attributes=True)  # type: ignore[assignment]
+
+    selection: str
+    our_selection: str | None
+    market_family: str
+    line: float | None
+    description: str | None
+
+    reference_odds: float | None
+    consensus_odds: float | None
+    odds: float | None
+    fair_odds: float | None
+
+    p_model: float | None
+    q_fair: float | None
+    p_used: float | None
+
+    expected_value: float | None
+    price_edge: float | None
+    model_edge: float | None
+    rule_edge: float | None
+
+    rule_qualified: bool
+    grade: str | None
+    # 0.0 means assessed, not recommended. The field that separates analysis
+    # from a recommendation, and the one to filter on.
+    stake_fraction: float
+    # Why it was refused, in readable prose. Empty on a pick.
+    reasons: list[str] | None
+
+    # Per-row provenance, so a row still reads as what it was recommended under
+    # after the rule is promoted.
+    config_status: str | None
+    selection_rule_status: str | None
+    selection_rule_reference: str | None
+
+    # Null until StatPitch publishes them; see the SP section above.
+    selection_basis: str | None
+    pricing: str | None
+    model_odds: float | None
+
+    captured_at: datetime | None
+
+
+class BetPickRead(SelectionRead):
+    """A staked selection, with enough of its fixture to render on its own.
+
+    `/bets/today` is read without a fixture list beside it, so the clubs and the
+    kickoff travel with the pick rather than being looked up separately.
+    """
+
+    fixture_id: str
+    competition_id: str
+    competition_name: str
+    competition_short_name: str
+    competition_icon_url: str | None
+    home_team: str
+    away_team: str
+    home_crest_url: str | None
+    away_crest_url: str | None
+    match_date: date
+    commence_time: datetime | None
+
+
+class BetsTodayRead(SQLModel):
+    """Today's pick, or a reasoned absence — served from cache.
+
+    `caveat` is not decoration and is never null while a pick is present. A
+    reader shown a recommendation without the statement qualifying it has been
+    told something untrue, so the endpoint synthesises one from the stored rule
+    status rather than return a pick bare. Render it.
+    """
+
+    match_date: date
+
+    bets: list[BetPickRead]
+    count: int
+    assessed: int
+    qualified_by_rule: int
+    total_exposure: float
+
+    # Always present when `bets` is non-empty.
+    caveat: str | None
+    # Not published upstream yet. When it is, it accompanies every tier-2 pick
+    # and must be rendered beside one.
+    confidence_caveat: str | None
+    disclaimer: str | None
+
+    # Why the day is empty, when it is. An empty day is a normal answer here,
+    # not a failure — most days produce no qualifying bet at all.
+    reason: str | None
+    binding_constraint: str | None
+    empty_because: dict[str, Any] | None
+
+    by_basis: dict[str, int] | None
+    selection_rule: dict[str, Any] | None
+    config_status: str | None
+    selection_rule_status: str | None
+
+    model_version: str | None
+    config_version: str | None
+    generated_at: datetime | None
+    synced_at: datetime | None
+
+
 class CompetitionRead(SQLModel):
     """One competition, for filter chips and headings.
 
@@ -1111,7 +1247,10 @@ class StatsRead(SQLModel):
     date_confirmed_today: int
     high_confidence_today: int
     high_confidence_threshold: float
+    # Our own Kelly picks, and StatPitch's staked rule selections. Counted
+    # apart because they are two different strategies, not two views of one.
     value_bets_today: int
+    rule_bets_today: int = 0
 
     roi: list[BasisRoi]
 
