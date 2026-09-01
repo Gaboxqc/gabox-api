@@ -130,19 +130,15 @@ class Settings(BaseSettings):
     # Competition icons, kept beside the crests rather than among them.
     r2_competition_prefix: str = "statpitch/competitions"
 
+    # Results only. The Odds API no longer supplies a single price: StatPitch
+    # prices its own card, so `odds_api_region`, `odds_api_markets` and
+    # `odds_api_bookmakers` are gone with the requests that used them. What is
+    # left is one scores request per league per run — roughly 150 a month
+    # against the 500/month free tier, with nothing else competing for it.
     odds_api_key: str = ""
-    odds_api_region: str = "eu"
-    # One request per market per league per run, against a 500/month free tier.
-    # h2h alone across five leagues is ~150/month; adding totals and btts takes
-    # it to ~450 before scores are counted.
-    odds_api_markets: list[str] = ["h2h"]
-    # Empty means average every bookmaker the region returns.
-    odds_api_bookmakers: list[str] = []
 
     @field_validator(
         "statpitch_competitions",
-        "odds_api_markets",
-        "odds_api_bookmakers",
         mode="before",
     )
     @classmethod

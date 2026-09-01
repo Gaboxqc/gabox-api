@@ -2,12 +2,27 @@
 
 One pass does the whole job, in an order that matters:
 
-    fetch fixtures -> price them -> settle finished ones -> bank the ledger -> prune
+    fetch fixtures and prices -> store them -> settle finished ones
+    -> bank the ledger -> prune
 
 Settling and banking come before pruning so a result is never lost to the
 three-day retention. Everything is idempotent and keyed on `fixture_id`, so
 running it twice in a row changes nothing and a failed run is fixed by the next
 one rather than by hand.
+
+Prices come from StatPitch now, not The Odds API. It publishes its own card
+against a 25-book panel, keyed by `fixture_id`, so a price is joined by identity
+rather than by matching two spellings of a club's name — and at no quota cost.
+The Odds API is still here, but only for results: StatPitch has no results
+endpoint, so without it nothing settles and there is no ROI at all.
+
+Four upstream calls make one pass, in one client, because the free instance
+sleeps after fifteen minutes and the cold start is worth paying once:
+`/fixtures/upcoming` for predictions, `/card/upcoming` for every priced and
+graded selection, `/bets/today` for the daily pick and the caveats that qualify
+it, and `/odds/matchday` per window day — the only place `kickoff_utc` is
+published, and therefore the only source of the real instant every local-day
+bucket is computed from.
 
 There is no in-process scheduler: the app runs serverless, where background
 threads do not survive between requests. The rollover is driven externally by
@@ -16,25 +31,35 @@ hitting `POST /statpitch/sync` at 06:00 UTC, which is midnight in Nicaragua.
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.core.config import settings
 from api.statpitch.client import (
     StatPitchError,
     build_client,
+    fetch_bets_today,
+    fetch_card,
     fetch_fixture_window,
     fetch_health,
+    fetch_matchday_odds,
 )
 from api.statpitch.clock import Window, current_window, to_local_date
 from api.statpitch.leagues import STATPITCH_ODDS_COVERAGE
-from api.statpitch.matching import best_match
-from api.statpitch.models import SPFixture, StatPitchFixture
+from api.statpitch.models import (
+    SPBetsToday,
+    SPFixture,
+    SPSelection,
+    StatPitchBetDay,
+    StatPitchFixture,
+    StatPitchSelection,
+)
 from api.statpitch.motd import ensure as ensure_match_of_the_day
-from api.statpitch.odds_service import OddsEvent, OddsUnavailable, fetch_odds
-from api.statpitch.pricing import apply_pricing
+from api.statpitch.odds_api import OddsUnavailable
+from api.statpitch.pricing import apply_pricing, market_for
 from api.statpitch.scores_service import fetch_scores
+from api.statpitch.selections import translate
 from api.statpitch.settlement import apply_scores, bank_ledger, prune_fixtures
 from api.statpitch.teams import link_fixtures
 
@@ -47,7 +72,14 @@ class SyncReport:
     fetched: int = 0
     stored: int = 0
     priced: int = 0
-    unmatched_odds: int = 0
+    # Fixtures StatPitch published no price for. Not a matching failure any
+    # more — prices arrive keyed by `fixture_id`, so there is nothing left to
+    # mismatch. A fixture is unpriced because the feed has not published its
+    # matchday block yet, which is normal days ahead of kickoff.
+    unpriced: int = 0
+    # StatPitch selection rows stored, and how many of them it actually staked.
+    selections: int = 0
+    rule_bets: int = 0
     settled: int = 0
     ledgered: int = 0
     pruned: int = 0
@@ -119,22 +151,57 @@ def _to_row(
     return row, fixture.home_team, fixture.away_team
 
 
-def _attach_odds(row: StatPitchFixture, event: OddsEvent) -> None:
-    row.commence_time = event.commence_time
-    # A real instant beats StatPitch's nominal date: `kickoff` is a bare
-    # "20:00" with no zone, which cannot be converted to a local day at all.
-    row.match_date = to_local_date(event.commence_time)
-    row.odds_home = event.odds_home
-    row.odds_draw = event.odds_draw
-    row.odds_away = event.odds_away
-    row.odds_over_1_5 = event.odds_over_1_5
-    row.odds_under_1_5 = event.odds_under_1_5
-    row.odds_over_2_5 = event.odds_over_2_5
-    row.odds_under_2_5 = event.odds_under_2_5
-    row.odds_over_3_5 = event.odds_over_3_5
-    row.odds_under_3_5 = event.odds_under_3_5
-    row.odds_btts_yes = event.odds_btts_yes
-    row.odds_btts_no = event.odds_btts_no
+def _is_bettable(selection: SPSelection) -> bool:
+    """Whether this row's `odds` is a price somebody is actually offering.
+
+    Three of the four prices on a selection are opinions — `fair_odds` and
+    `model_odds` are ours and StatPitch's, `reference_odds` is a benchmark —
+    and only `odds`, the best quote, can be taken. When `pricing` ships
+    upstream, a `model` row is excluded here too: its `odds` is `1 / p_model`,
+    which is an opinion wearing a price's clothes and must never reach a column
+    the ledger later reads as a price taken.
+    """
+    if selection.odds is None or selection.odds <= 1:
+        return False
+    return selection.pricing != "model"
+
+
+def _attach_kickoff(row: StatPitchFixture, kickoff: datetime) -> None:
+    """Give the fixture a real instant, and file it under the right local day.
+
+    This is the one thing StatPitch's fixture feed cannot supply: its `kickoff`
+    is a bare "20:00" with no zone, which cannot be converted to a local day at
+    all. `/odds/matchday` publishes `kickoff_utc`, which is why that endpoint is
+    called even on a day whose prices we would otherwise not need.
+    """
+    row.commence_time = kickoff
+    row.match_date = to_local_date(kickoff)
+
+
+def _attach_odds(row: StatPitchFixture, selections: list[SPSelection]) -> bool:
+    """Copy StatPitch's best quotes onto the fixture's own price columns.
+
+    Only bettable rows, and only selections we have a name for. The column is
+    resolved through `pricing.MARKETS` rather than a second mapping table, so
+    a market added there is priced here without a matching edit.
+
+    Returns whether anything was priced.
+    """
+    priced = False
+
+    for selection in selections:
+        if not _is_bettable(selection):
+            continue
+        ours = translate(selection.selection)
+        if ours is None:
+            continue
+        market = market_for(ours)
+        if market is None:
+            continue
+        setattr(row, market.odds_field, selection.odds)
+        priced = True
+
+    return priced
 
 
 # Fields the sync refreshes on an existing row. Everything absent from this
@@ -255,6 +322,173 @@ def _upsert(session: Session, incoming: list[StatPitchFixture]) -> int:
     return len(incoming)
 
 
+def _selection_row(
+    selection: SPSelection,
+    *,
+    captured_at: datetime | None,
+    config_status: str | None,
+    rule_status: str | None,
+    rule_reference: str | None,
+) -> StatPitchSelection:
+    """One StatPitch selection, stored as it arrived.
+
+    The provenance arguments ride onto every row rather than being recorded
+    once per sync. That is the contract's own instruction, and the reason is
+    concrete: when the selection rule is promoted from `experimental` to
+    `fitted`, a row banked today must still read as experimental. A status
+    joined at read time would silently relabel history.
+    """
+    return StatPitchSelection(
+        fixture_id=selection.fixture_id,
+        selection=selection.selection,
+        our_selection=translate(selection.selection),
+        market_family=selection.market_family,
+        line=selection.line,
+        description=selection.description,
+        reference_odds=selection.reference_odds,
+        consensus_odds=selection.consensus_odds,
+        odds=selection.odds,
+        fair_odds=selection.fair_odds,
+        p_model=selection.p_model,
+        q_fair=selection.q_fair,
+        p_used=selection.p_used,
+        edge_prob=selection.edge_prob,
+        expected_value=selection.expected_value,
+        price_edge=selection.price_edge,
+        model_edge=selection.model_edge,
+        rule_edge=selection.rule_edge,
+        rule_qualified=selection.rule_qualified,
+        grade=selection.grade,
+        composite=selection.composite,
+        stake_fraction=selection.stake_fraction,
+        reasons=selection.reasons or None,
+        config_status=config_status,
+        selection_rule_status=rule_status,
+        selection_rule_reference=rule_reference,
+        selection_basis=selection.selection_basis,
+        pricing=selection.pricing,
+        model_odds=selection.model_odds,
+        captured_at=captured_at,
+    )
+
+
+# Everything a re-sync refreshes on an existing selection. `fixture_id` and
+# `selection` are the identity and are absent on purpose.
+_REFRESHABLE_SELECTION = (
+    "our_selection",
+    "market_family",
+    "line",
+    "description",
+    "reference_odds",
+    "consensus_odds",
+    "odds",
+    "fair_odds",
+    "p_model",
+    "q_fair",
+    "p_used",
+    "edge_prob",
+    "expected_value",
+    "price_edge",
+    "model_edge",
+    "rule_edge",
+    "rule_qualified",
+    "grade",
+    "composite",
+    "stake_fraction",
+    "reasons",
+    "config_status",
+    "selection_rule_status",
+    "selection_rule_reference",
+    "selection_basis",
+    "pricing",
+    "model_odds",
+    "captured_at",
+)
+
+
+def _upsert_selections(
+    session: Session, incoming: list[StatPitchSelection], ledgered: set[str]
+) -> int:
+    """Insert or refresh selections, keyed on `(fixture_id, selection)`.
+
+    A selection belonging to a fixture the ledger has already banked is left
+    alone, exactly as `_upsert` leaves the fixture alone. Re-pricing a settled
+    bet would rewrite the price its result was recorded at.
+    """
+    if not incoming:
+        return 0
+
+    fixture_ids = {row.fixture_id for row in incoming}
+    existing = {
+        (row.fixture_id, row.selection): row
+        for row in session.exec(
+            select(StatPitchSelection).where(col(StatPitchSelection.fixture_id).in_(fixture_ids))
+        ).all()
+    }
+
+    stored = 0
+    for row in incoming:
+        if row.fixture_id in ledgered:
+            continue
+
+        current = existing.get((row.fixture_id, row.selection))
+        if current is None:
+            session.add(row)
+            stored += 1
+            continue
+
+        for name in _REFRESHABLE_SELECTION:
+            setattr(current, name, getattr(row, name))
+        current.synced_at = datetime.now(UTC)
+        session.add(current)
+        stored += 1
+
+    session.commit()
+    return stored
+
+
+def _upsert_bet_day(session: Session, day: date, payload: SPBetsToday) -> None:
+    """Cache what `/bets/today` said, caveats included.
+
+    The caveats are the reason this is stored rather than proxied. They are the
+    difference between a pick a reader can weigh and a pick they cannot, and
+    the upstream instance sleeps after fifteen minutes idle — so proxying would
+    drop them at exactly the moment a reader is looking at a bet.
+    """
+    rule = payload.selection_rule
+    refusal = payload.refusal
+
+    row = session.exec(
+        select(StatPitchBetDay).where(StatPitchBetDay.match_date == day)
+    ).first() or StatPitchBetDay(match_date=day)
+
+    row.count = payload.count
+    row.assessed = payload.assessed
+    row.qualified_by_rule = payload.qualified_by_rule
+    row.total_exposure = payload.total_exposure
+    row.caveat = payload.caveat
+    row.confidence_caveat = payload.confidence_caveat
+    row.disclaimer = payload.disclaimer
+    row.reason = payload.reason
+    row.binding_constraint = payload.binding_constraint
+    row.empty_because = (
+        payload.empty_because.model_dump(mode="json") if payload.empty_because else None
+    )
+    row.config_status = payload.config_status or rule.status
+    row.selection_rule_status = rule.status
+    row.selection_rule = rule.model_dump(mode="json")
+    row.by_basis = payload.by_basis or None
+    row.refusal_reason_code = refusal.reason_code if refusal else None
+    row.refusal_reason = refusal.reason if refusal else None
+    row.model_version = payload.model_version
+    row.config_version = payload.config_version
+    row.generated_at = payload.generated_at
+    row.synced_at = datetime.now(UTC)
+
+    session.add(row)
+    session.commit()
+
+
 async def run_sync(session: Session) -> SyncReport:
     """Fetch, price, settle, bank and prune. Safe to run repeatedly."""
     window = current_window()
@@ -273,7 +507,9 @@ async def run_sync(session: Session) -> SyncReport:
             "The Odds API covers them."
         )
 
-    # ── 1. Fixtures and predictions ──────────────────────────────────────────
+    # ── 1. Everything StatPitch has to say ───────────────────────────────────
+    # One client for the whole batch. The free instance sleeps after fifteen
+    # minutes idle, so the cold start is worth paying once rather than per call.
     async with build_client() as client:
         health = await fetch_health(client)
         if not health.ready:
@@ -283,6 +519,24 @@ async def run_sync(session: Session) -> SyncReport:
             )
 
         fetched = await fetch_fixture_window(client, window.start, window.end, competitions)
+        card = await fetch_card(client, window.start, window.end)
+        bets_today = await fetch_bets_today(client)
+
+        # `kickoff_utc` is published only on `/odds/matchday`, and it is the
+        # only real instant available anywhere — the fixture feed's `kickoff` is
+        # a bare "20:00" with no zone. Every local-day bucket depends on it, so
+        # this endpoint is called for its timestamps even on a day whose prices
+        # the card already carries.
+        kickoffs: dict[str, datetime] = {}
+        for day in (window.yesterday, window.today, window.tomorrow):
+            try:
+                matchday = await fetch_matchday_odds(client, day)
+            except StatPitchError as exc:
+                report.warnings.append(f"No matchday prices for {day}: {exc}")
+                continue
+            for priced_fixture in matchday.fixtures:
+                if priced_fixture.kickoff_utc is not None:
+                    kickoffs[priced_fixture.fixture_id] = priced_fixture.kickoff_utc
 
     report.fetched = len(fetched.fixtures)
     report.model_version = fetched.model_version
@@ -294,28 +548,47 @@ async def run_sync(session: Session) -> SyncReport:
     rows = [row for row, _, _ in resolved]
 
     # ── 2. Prices ────────────────────────────────────────────────────────────
-    try:
-        odds = await fetch_odds(competitions)
-        report.warnings.extend(odds.warnings)
-    except OddsUnavailable as exc:
-        # Predictions are still worth storing and showing without a price; only
-        # the betting half of the product is lost.
-        odds = None
-        report.warnings.append(f"No odds this run: {exc}")
+    # StatPitch prices its own card now, and the rows arrive keyed by
+    # `fixture_id`. Nothing is matched by club name any more, so the whole class
+    # of mismatch `matching` exists to prevent cannot happen to a price — it
+    # still can to a *result*, which is why that module has not gone anywhere.
+    #
+    # `assessments` is everything priced and graded; `bets` is the subset
+    # StatPitch staked. Both are stored, so a fixture page can show the market
+    # on a match where nothing was recommended. `bets` is folded in second so a
+    # staked row wins over its unstaked duplicate.
+    by_fixture: dict[str, dict[str, SPSelection]] = {}
+    for selection in card.assessments + card.bets:
+        by_fixture.setdefault(selection.fixture_id, {})[selection.selection] = selection
 
-    if odds is not None:
-        by_competition: dict[str, list[OddsEvent]] = {}
-        for event in odds.events:
-            by_competition.setdefault(event.competition_id, []).append(event)
+    rule = bets_today.selection_rule
+    incoming_selections: list[StatPitchSelection] = []
 
-        for row in rows:
-            candidates = by_competition.get(row.competition_id, [])
-            match = best_match(row.home_team, row.away_team, candidates, key=lambda e: e.teams)
-            if match is None:
-                report.unmatched_odds += 1
-                continue
-            _attach_odds(row, match[0])
+    for row in rows:
+        kickoff = kickoffs.get(row.fixture_id)
+        if kickoff is not None:
+            _attach_kickoff(row, kickoff)
+
+        priced = list(by_fixture.get(row.fixture_id, {}).values())
+        if not priced:
+            # Normal days ahead of kickoff: the feed publishes a matchday block
+            # at a time of its choosing, not ours.
+            report.unpriced += 1
+        elif _attach_odds(row, priced):
             report.priced += 1
+
+        incoming_selections.extend(
+            _selection_row(
+                selection,
+                captured_at=card.card_generated_at,
+                config_status=bets_today.config_status or rule.status,
+                rule_status=rule.status,
+                rule_reference=rule.reference,
+            )
+            for selection in priced
+        )
+
+    report.rule_bets = sum(1 for row in incoming_selections if row.stake_fraction > 0)
 
     for row in rows:
         apply_pricing(row)
@@ -331,6 +604,20 @@ async def run_sync(session: Session) -> SyncReport:
         )
 
     report.stored = _upsert(session, rows)
+
+    # ── 2bb. StatPitch's own selections and daily pick ───────────────────────
+    # After the fixture upsert, because a selection is a child of a fixture row
+    # and the foreign key will not accept one that is not stored yet.
+    ledgered = set(
+        session.exec(
+            select(StatPitchFixture.fixture_id).where(
+                col(StatPitchFixture.fixture_id).in_([row.fixture_id for row in rows]),
+                StatPitchFixture.ledgered.is_(True),
+            )
+        ).all()
+    )
+    report.selections = _upsert_selections(session, incoming_selections, ledgered)
+    _upsert_bet_day(session, window.today, bets_today)
 
     # ── 2c. Match of the day ─────────────────────────────────────────────────
     # After the upsert, so the pick refers to a fixture that is actually stored.
@@ -367,10 +654,13 @@ async def run_sync(session: Session) -> SyncReport:
     report.warnings.extend(prune_warnings)
 
     log.info(
-        "Sync complete: fetched=%d stored=%d priced=%d settled=%d ledgered=%d pruned=%d",
+        "Sync complete: fetched=%d stored=%d priced=%d selections=%d rule_bets=%d "
+        "settled=%d ledgered=%d pruned=%d",
         report.fetched,
         report.stored,
         report.priced,
+        report.selections,
+        report.rule_bets,
         report.settled,
         report.ledgered,
         report.pruned,

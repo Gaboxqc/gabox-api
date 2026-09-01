@@ -12,8 +12,14 @@ import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
+from api.statpitch.client import (
+    StatPitchRefusal,
+    fetch_bets_today,
+    fetch_fixture_window,
+)
 from api.statpitch.models import (
     SPBetsToday,
     SPCard,
@@ -174,6 +180,52 @@ class TestMatchdayOdds:
             "1x2_draw",
             "1x2_home",
         ]
+
+
+class TestClientRefusalHandling:
+    """The refusal on `/bets/today` must not be raised, and the one on
+    `/fixtures/upcoming` must still be."""
+
+    @staticmethod
+    def _client(payload: dict, path: str) -> httpx.AsyncClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == path
+            return httpx.Response(200, json=payload)
+
+        return httpx.AsyncClient(
+            base_url="https://statpitch.test",
+            transport=httpx.MockTransport(handler),
+        )
+
+    @pytest.mark.anyio
+    async def test_an_experimental_rule_does_not_fail_the_sync(self):
+        """`SELECTION_RULE_EXPERIMENTAL` is present on every response while the
+        rule is experimental, and the card returns real bets beside it.
+
+        Raising here — the way `fetch_fixture_window` rightly raises for
+        `NO_FIXTURE_SOURCE` — would fail every sync for as long as the rule
+        carries that status, which is indefinitely.
+        """
+        async with self._client(_load("bets_today"), "/bets/today") as client:
+            result = await fetch_bets_today(client)
+
+        assert result.refusal.reason_code == "SELECTION_RULE_EXPERIMENTAL"
+        assert result.caveat
+
+    @pytest.mark.anyio
+    async def test_a_missing_fixture_artifact_still_raises(self):
+        """A broken deploy upstream is not a quiet day, and must not read as one."""
+        payload = {
+            "fixtures": [],
+            "refusal": {
+                "available": False,
+                "reason_code": "NO_FIXTURE_SOURCE",
+                "reason": "the fixture artifact is not loaded",
+            },
+        }
+        async with self._client(payload, "/fixtures/upcoming") as client:
+            with pytest.raises(StatPitchRefusal, match="NO_FIXTURE_SOURCE"):
+                await fetch_fixture_window(client, date(2026, 9, 1), date(2026, 9, 3))
 
 
 class TestTranslation:

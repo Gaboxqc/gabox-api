@@ -16,9 +16,10 @@ from sqlmodel import Session, select
 
 from api.statpitch.clock import Window, to_local_date, today_local
 from api.statpitch.matching import best_match
-from api.statpitch.models import StatPitchFixture, StatPitchSettledBet
+from api.statpitch.models import StatPitchFixture, StatPitchSelection, StatPitchSettledBet
 from api.statpitch.pricing import odds_of, probability_of
 from api.statpitch.scores_service import MatchScore
+from api.statpitch.selections import is_bankable
 
 log = logging.getLogger("statpitch.settlement")
 
@@ -162,6 +163,86 @@ def _ledger_row(
     )
 
 
+def _rule_selection(session: Session, fixture: StatPitchFixture) -> StatPitchSelection | None:
+    """The selection StatPitch staked on this fixture, if it is safe to bank.
+
+    Four guards, each closing a different way of recording a bet that was never
+    really available:
+
+    - `stake_fraction > 0` — anything else was assessed, not recommended.
+    - `bettable` — excludes a `model`-priced row, whose `odds` is `1 / p_model`.
+      Banking that would enter a settled bet at a price no book ever offered.
+    - `is_bankable` — only 1X2. `selection_won` resolves every market it knows
+      on halves, so nothing it handles can push; a handicap can, and would be
+      settled as a loss rather than returned.
+    - a translated name — `selection_won` cannot resolve "1x2_home".
+
+    The highest stake wins if a fixture somehow carries two, because the ledger
+    holds one row per basis per fixture.
+    """
+    candidates = session.exec(
+        select(StatPitchSelection).where(
+            StatPitchSelection.fixture_id == fixture.fixture_id,
+            StatPitchSelection.stake_fraction > 0,
+        )
+    ).all()
+
+    eligible = [
+        row
+        for row in candidates
+        if row.our_selection is not None and row.bettable and is_bankable(row.market_family)
+    ]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda row: row.stake_fraction)
+
+
+def _rule_ledger_row(
+    fixture: StatPitchFixture, selection: StatPitchSelection
+) -> StatPitchSettledBet | None:
+    """A ledger row for StatPitch's own pick, at StatPitch's own numbers.
+
+    `p_used` rather than our probability and `odds` rather than our averaged
+    price: this series exists to measure *their* rule, and scoring it against
+    our inputs would measure neither. The stake stays one flat unit so all
+    three series remain comparable, with `stake_fraction` carried alongside so
+    a stake-weighted variant is still derivable.
+
+    The provenance is frozen here. When the rule is promoted to `fitted`, this
+    row must still read as whatever it was recommended under.
+    """
+    if fixture.home_score is None or fixture.away_score is None:
+        return None
+    if selection.our_selection is None or selection.p_used is None or selection.odds is None:
+        return None
+
+    won = selection_won(selection.our_selection, fixture.home_score, fixture.away_score)
+    stake = 1.0
+
+    return StatPitchSettledBet(
+        fixture_id=fixture.fixture_id,
+        competition_id=fixture.competition_id,
+        home_team_id=fixture.home_team_id,
+        away_team_id=fixture.away_team_id,
+        match_date=fixture.match_date,
+        basis="rule",
+        selection=selection.our_selection,
+        probability=selection.p_used,
+        odds_taken=selection.odds,
+        stake_units=stake,
+        kelly_fraction=selection.stake_fraction,
+        won=won,
+        pnl_units=round((selection.odds - 1) * stake if won else -stake, 4),
+        home_score=fixture.home_score,
+        away_score=fixture.away_score,
+        model_version=fixture.model_version,
+        selection_basis=selection.selection_basis,
+        pricing=selection.pricing,
+        config_status=selection.config_status,
+        selection_rule_status=selection.selection_rule_status,
+    )
+
+
 def bank_ledger(session: Session, fixtures: list[StatPitchFixture]) -> int:
     """Write ledger rows for settled fixtures, then mark them banked.
 
@@ -194,6 +275,18 @@ def bank_ledger(session: Session, fixtures: list[StatPitchFixture]) -> int:
                 continue
             session.add(row)
             written += 1
+
+        # StatPitch's own rule, banked as a third and separate series. It is
+        # measured against its own numbers rather than folded into ours,
+        # because the whole point of tagging it is to be able to tell later
+        # whether their rule or our staking is what earned.
+        if "rule" not in existing:
+            staked = _rule_selection(session, fixture)
+            if staked is not None:
+                row = _rule_ledger_row(fixture, staked)
+                if row is not None:
+                    session.add(row)
+                    written += 1
 
         fixture.ledgered = True
         session.add(fixture)

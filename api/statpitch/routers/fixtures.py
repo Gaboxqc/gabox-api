@@ -31,7 +31,7 @@ from api.statpitch.models import (
 )
 from api.statpitch.motd import choose as choose_match_of_the_day
 from api.statpitch.motd import fixture_for as match_of_the_day_fixture
-from api.statpitch.odds_service import OddsUnavailable
+from api.statpitch.odds_api import OddsUnavailable
 from api.statpitch.quota import remaining, unlock, unlocked_ids
 from api.statpitch.serialization import (
     FixtureFreeRead,
@@ -151,7 +151,9 @@ async def sync(db: SessionDep):
         fetched=report.fetched,
         stored=report.stored,
         priced=report.priced,
-        unmatched_odds=report.unmatched_odds,
+        unpriced=report.unpriced,
+        selections=report.selections,
+        rule_bets=report.rule_bets,
         settled=report.settled,
         ledgered=report.ledgered,
         pruned=report.pruned,

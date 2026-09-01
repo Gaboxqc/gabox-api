@@ -143,12 +143,18 @@ class TestStats:
     """ROI is a Pro line on the pricing page, so these carry the master key —
     which reads as Elite. `tests/test_statpitch_tiers.py` covers the refusals."""
 
-    def test_reports_the_window_and_both_series(self, client, auth):
+    def test_reports_the_window_and_every_series(self, client, auth):
+        """Three now: ours by 1X2, ours across markets, and StatPitch's rule.
+
+        The third is kept separate rather than folded in because it is measured
+        at StatPitch's own numbers — `p_used` and its own quote — and averaging
+        it with ours would measure neither.
+        """
         body = client.get("/statpitch/stats", headers=auth).json()
 
         assert body["timezone"] == "America/Managua"
         assert body["generated_for"] == today_local().isoformat()
-        assert [entry["basis"] for entry in body["roi"]] == ["1x2", "overall"]
+        assert [entry["basis"] for entry in body["roi"]] == ["1x2", "overall", "rule"]
         # Nothing settled, so no ROI can be claimed.
         assert all(entry["week"]["roi_pct"] is None for entry in body["roi"])
 

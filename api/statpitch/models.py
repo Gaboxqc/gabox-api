@@ -1121,7 +1121,13 @@ class SyncResultRead(SQLModel):
     fetched: int
     stored: int
     priced: int
-    unmatched_odds: int
+    # Renamed from `unmatched_odds`, which described a name-matching failure
+    # that can no longer happen: prices arrive keyed by `fixture_id`. A fixture
+    # is unpriced because the feed has not published its matchday block yet.
+    unpriced: int
+    # StatPitch selection rows stored, and how many of them it staked.
+    selections: int = 0
+    rule_bets: int = 0
     settled: int
     ledgered: int
     pruned: int

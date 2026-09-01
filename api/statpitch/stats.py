@@ -30,8 +30,10 @@ from api.statpitch.pricing import HIGH_CONFIDENCE_THRESHOLD
 WEEK_DAYS = 7
 MONTH_DAYS = 30
 
-# The two parallel track records, in the order the frontend shows them.
-BASES: tuple[str, ...] = ("1x2", "overall")
+# The parallel track records, in the order the frontend shows them. "rule" is
+# StatPitch's own selection rule, measured at its own numbers — kept apart
+# from ours so it is possible to tell later which of the two earned.
+BASES: tuple[str, ...] = ("1x2", "overall", "rule")
 
 
 def window_start(days: int, today: date | None = None) -> date:

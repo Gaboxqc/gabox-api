@@ -12,6 +12,24 @@ ledger measures our strategy rather than StatPitch's.
 Kelly is the deciding number rather than EV, because EV alone cannot tell a
 sound bet from a lottery ticket: +150% EV on a 5% shot has a tiny Kelly and is
 not worth the variance.
+
+Two things changed when StatPitch became the price source, and neither is
+visible in the code below:
+
+**Only 1X2 carries a price now.** StatPitch publishes `market_families: ["1x2"]`
+and nothing else; totals and BTTS have no source at all since The Odds API
+stopped being asked for markets. `MARKETS` still lists them on purpose — the
+loop already stores None for an absent price, `probability_of` and `odds_of`
+still have to resolve the historical selections the ledger holds, and removing
+an entry would break settlement for any fixture already carrying one as its
+pending pick. They simply never price.
+
+**So `best_overall_bet` and `best_bet` now agree.** `overall` was the
+across-every-market series and `1x2` the confined one; with one market priced
+they select the same row every time, and their two ROI series will read
+identically until totals ship. That is a true reading of what is being measured
+rather than a bug — but it means the gap between them is not evidence of
+anything at the moment.
 """
 
 from collections.abc import Callable
