@@ -215,17 +215,26 @@ async def fetch_bets_today(client: httpx.AsyncClient) -> SPBetsToday:
     return SPBetsToday.model_validate(await _get_json(client, "/bets/today"))
 
 
-async def fetch_card(client: httpx.AsyncClient, start: date, end: date) -> SPCard:
-    """Every priced and graded selection across a window.
+async def fetch_card(client: httpx.AsyncClient, days: int) -> SPCard:
+    """Every priced and graded selection from today forward.
 
-    `/card/upcoming`, never `/card/today`: prices publish days ahead, so the
-    today-filtered variant returns nothing on a day whose own fixtures are not
-    priced yet while a full slate sits in the card behind it.
+    `/card/upcoming` is **forward-only**. It takes a `days` count and no start
+    date, so it always begins at today and reaches `today + days` — asking for
+    3 on 2026-09-01 returns `from=2026-09-01, to=2026-09-04`. There is no way to
+    ask it for yesterday at all.
 
-    `days` is inclusive of both ends, which is one more than the difference.
+    Hence a count rather than the window it serves. An earlier version took
+    `(start, end)` and quietly dropped `start`, which read as though a range had
+    been honoured when half of it had not; a signature that accepts a value it
+    ignores is worse than one that never offered to take it.
+
+    Never `/card/today`: prices publish days ahead, so the today-filtered
+    variant returns nothing on a day whose own fixtures are not priced yet while
+    a full slate sits in the card behind it.
     """
-    days = max(1, (end - start).days + 1)
-    return SPCard.model_validate(await _get_json(client, "/card/upcoming", params={"days": days}))
+    return SPCard.model_validate(
+        await _get_json(client, "/card/upcoming", params={"days": max(1, days)})
+    )
 
 
 async def fetch_matchday_odds(

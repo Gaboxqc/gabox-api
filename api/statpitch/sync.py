@@ -519,7 +519,11 @@ async def run_sync(session: Session) -> SyncReport:
             )
 
         fetched = await fetch_fixture_window(client, window.start, window.end, competitions)
-        card = await fetch_card(client, window.start, window.end)
+        # The card only reaches forward, so it can cover the window's forward
+        # half and nothing else — yesterday is unreachable by construction.
+        # Asking for more days than the cache retains would return selections
+        # for fixtures we do not store, which are discarded on arrival.
+        card = await fetch_card(client, (window.end - window.today).days)
         bets_today = await fetch_bets_today(client)
 
         # `kickoff_utc` is published only on `/odds/matchday`, and it is the
