@@ -1,0 +1,121 @@
+{
+  "date": "2026-09-02",
+  "fixtures": [
+    {
+      "fixture_id": "GER.DFB_POKAL|2026-2027|round_1|VfL Osnabrück|FC Bayern München",
+      "competition_id": "GER.DFB_POKAL",
+      "home_team": "VfL Osnabrück",
+      "away_team": "FC Bayern München",
+      "kickoff_utc": "2026-09-02 18:45:00",
+      "markets": {
+        "1x2": [
+          {
+            "fixture_id": "GER.DFB_POKAL|2026-2027|round_1|VfL Osnabrück|FC Bayern München",
+            "competition_id": "GER.DFB_POKAL",
+            "home_team": "VfL Osnabrück",
+            "away_team": "FC Bayern München",
+            "selection": "1x2_home",
+            "market_family": "1x2",
+            "line": null,
+            "description": "Home win",
+            "q_fair": 0.025308270759727827,
+            "fair_odds": 39.5128,
+            "consensus_odds": 19.3,
+            "odds": 30.0,
+            "p_model": 0.11299705829068049,
+            "p_used": 0.025308270759727827,
+            "edge_prob": 0.0,
+            "expected_value": -0.24075187720816504,
+            "price_edge": -0.24075187720816504,
+            "model_edge": 0.0,
+            "reference_odds": null,
+            "rule_edge": null,
+            "rule_qualified": false,
+            "grade": "F",
+            "composite": 0.0,
+            "stake_fraction": 0.0,
+            "reasons": [
+              "no free odds coverage for this competition, so no benchmark exists",
+              "book margin 0.110 above 0.080",
+              "price 30.00 above the odds ceiling 8.0"
+            ]
+          },
+          {
+            "fixture_id": "GER.DFB_POKAL|2026-2027|round_1|VfL Osnabrück|FC Bayern München",
+            "competition_id": "GER.DFB_POKAL",
+            "home_team": "VfL Osnabrück",
+            "away_team": "FC Bayern München",
+            "selection": "1x2_draw",
+            "market_family": "1x2",
+            "line": null,
+            "description": "Draw",
+            "q_fair": 0.05054041997280782,
+            "fair_odds": 19.7861,
+            "consensus_odds": 12.24,
+            "odds": 17.0,
+            "p_model": 0.16608001462855382,
+            "p_used": 0.05054041997280782,
+            "edge_prob": 0.0,
+            "expected_value": -0.14081286046226715,
+            "price_edge": -0.14081286046226715,
+            "model_edge": 0.0,
+            "reference_odds": null,
+            "rule_edge": null,
+            "rule_qualified": false,
+            "grade": "F",
+            "composite": 0.0,
+            "stake_fraction": 0.0,
+            "reasons": [
+              "no free odds coverage for this competition, so no benchmark exists",
+              "book margin 0.110 above 0.080",
+              "price 17.00 above the odds ceiling 8.0"
+            ]
+          },
+          {
+            "fixture_id": "GER.DFB_POKAL|2026-2027|round_1|VfL Osnabrück|FC Bayern München",
+            "competition_id": "GER.DFB_POKAL",
+            "home_team": "VfL Osnabrück",
+            "away_team": "FC Bayern München",
+            "selection": "1x2_away",
+            "market_family": "1x2",
+            "line": null,
+            "description": "Away win",
+            "q_fair": 0.9241513092674642,
+            "fair_odds": 1.0821,
+            "consensus_odds": 1.0240000000000002,
+            "odds": 1.03,
+            "p_model": 0.7209229270807656,
+            "p_used": 0.9241513092674642,
+            "edge_prob": 0.0,
+            "expected_value": -0.0481241514545118,
+            "price_edge": -0.0481241514545118,
+            "model_edge": 0.0,
+            "reference_odds": null,
+            "rule_edge": null,
+            "rule_qualified": false,
+            "grade": "F",
+            "composite": 0.0,
+            "stake_fraction": 0.0,
+            "reasons": [
+              "no free odds coverage for this competition, so no benchmark exists",
+              "book margin 0.110 above 0.080"
+            ]
+          }
+        ]
+      },
+      "markets_priced": [
+        "1x2"
+      ],
+      "recommended": []
+    }
+  ],
+  "count": 1,
+  "selections": 3,
+  "note": "1X2 is captured for every competition daily; totals and handicaps only for competitions playing that day, because the price API bills per market per competition.",
+  "card_generated_at": "2026-09-01T02:00:38+00:00",
+  "disclaimer": "Simulation and analysis only. StatPitch does not place wagers, hold funds, or integrate with any bookmaker. Stake fractions are advisory output.",
+  "model_version": "elo-poisson-2.0.0.dev0",
+  "config_version": "dec-2026.08.1-experimental",
+  "schema_version": 1,
+  "generated_at": "2026-09-01T06:57:44+00:00"
+}

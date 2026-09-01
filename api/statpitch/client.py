@@ -19,7 +19,14 @@ from datetime import date
 import httpx
 
 from api.core.config import settings
-from api.statpitch.models import SPFixture, SPFixturesPage, SPHealth
+from api.statpitch.models import (
+    SPBetsToday,
+    SPCard,
+    SPFixture,
+    SPFixturesPage,
+    SPHealth,
+    SPMatchdayOdds,
+)
 
 log = logging.getLogger("statpitch.client")
 
@@ -189,3 +196,47 @@ async def fetch_fixture_window(
         )
 
     return result
+
+
+async def fetch_bets_today(client: httpx.AsyncClient) -> SPBetsToday:
+    """The daily pick, or a reasoned absence.
+
+    The `refusal` on this endpoint is deliberately **not** raised. It carries
+    `SELECTION_RULE_EXPERIMENTAL`, a standing statement that the rule's
+    calibration is inherited rather than re-measured — it is present on every
+    response while the rule is experimental, and the card returns real bets
+    beside it. Raising here, the way `fetch_fixture_window` does for
+    `NO_FIXTURE_SOURCE`, would fail every sync for as long as the rule carries
+    that status.
+
+    What the refusal is *for* is the reader: its `reason` is the same string as
+    `caveat`, and both have to survive the hop to the frontend.
+    """
+    return SPBetsToday.model_validate(await _get_json(client, "/bets/today"))
+
+
+async def fetch_card(client: httpx.AsyncClient, start: date, end: date) -> SPCard:
+    """Every priced and graded selection across a window.
+
+    `/card/upcoming`, never `/card/today`: prices publish days ahead, so the
+    today-filtered variant returns nothing on a day whose own fixtures are not
+    priced yet while a full slate sits in the card behind it.
+
+    `days` is inclusive of both ends, which is one more than the difference.
+    """
+    days = max(1, (end - start).days + 1)
+    return SPCard.model_validate(await _get_json(client, "/card/upcoming", params={"days": days}))
+
+
+async def fetch_matchday_odds(
+    client: httpx.AsyncClient, day: date, competition_id: str | None = None
+) -> SPMatchdayOdds:
+    """One day's prices, grouped per fixture and keyed by market family.
+
+    Also the only source of `kickoff_utc` — a real instant, which StatPitch's
+    fixture feed does not carry and which every local-day bucket depends on.
+    """
+    params: dict[str, str] = {"date": day.isoformat()}
+    if competition_id:
+        params["competition_id"] = competition_id
+    return SPMatchdayOdds.model_validate(await _get_json(client, "/odds/matchday", params=params))

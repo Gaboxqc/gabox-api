@@ -1,0 +1,63 @@
+{
+  "date": "2026-09-01",
+  "bets": [],
+  "count": 0,
+  "total_exposure": 0,
+  "assessed": 0,
+  "qualified_by_rule": 0,
+  "selection_rule": {
+    "status": "experimental",
+    "reference": "odds_pinnacle",
+    "threshold": 0.0,
+    "market_families": [
+      "1x2"
+    ],
+    "max_per_day": 3,
+    "evidence": "data/selection_rule_study.json"
+  },
+  "config_status": "experimental",
+  "disclaimer": "Simulation and analysis only. StatPitch does not place wagers, hold funds, or integrate with any bookmaker. Stake fractions are advisory output.",
+  "caveat": "selection_rule.status=experimental. The rule has five seasons of measured CLV; the 25-book panel it now runs on has none, so its calibration is inherited rather than re-measured. Treat these as a live test of a measured rule on a new panel, not a validated edge.",
+  "refusal": {
+    "available": false,
+    "reason_code": "SELECTION_RULE_EXPERIMENTAL",
+    "reason": "selection_rule.status=experimental. The rule has five seasons of measured CLV; the 25-book panel it now runs on has none, so its calibration is inherited rather than re-measured. Treat these as a live test of a measured rule on a new panel, not a validated edge.",
+    "measurement": {
+      "selection_rule_status": "candidate",
+      "candidate_reference": "betfair_exchange",
+      "pinnacle_clv_pre_break": 0.0051,
+      "pinnacle_clv_pre_break_t": 7.53,
+      "pinnacle_in_live_feed": false,
+      "betfair_clv_post_break": 0.0251,
+      "betfair_clv_post_break_t": 7.86,
+      "unselected_baseline_post_break": -0.0003,
+      "seasons_available_post_break": 1,
+      "seasons_required": 2,
+      "evidence": "data/selection_rule_study.json"
+    }
+  },
+  "reason": "Nothing to assess: card_is_empty.",
+  "empty_because": {
+    "card_dates": [
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-29",
+      "2026-08-30",
+      "2026-08-31",
+      "2026-09-02",
+      "2026-09-04",
+      "2026-09-05",
+      "2026-09-06",
+      "2026-09-07"
+    ],
+    "fixtures_today": 1,
+    "card_covers_today": false,
+    "cause": "fixtures_today_carry_no_price",
+    "note": "1 fixture(s) today, none of them priced. The price feed has not published this matchday block yet."
+  },
+  "model_version": "elo-poisson-2.0.0.dev0",
+  "config_version": "dec-2026.08.1-experimental",
+  "schema_version": 1,
+  "generated_at": "2026-09-01T06:57:19+00:00"
+}
