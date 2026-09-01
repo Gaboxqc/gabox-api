@@ -100,6 +100,12 @@ _ALIASES: dict[str, str] = {
     # Espanyol and Barcelona equally — and a tie is refused rather than guessed.
     "deportivo alaves": "alaves",
     "espanyol barcelona": "espanyol",
+    # ESPN calls them by the English name, so "koln" and "cologne" never meet.
+    # Worse than a miss: "1. FC Koln" cleans to "koln", which shares a token
+    # with *Viktoria* Koln and scored 0.90 against it — a different club from
+    # the same city. That one has no badge, so the wrong crest was never
+    # uploaded, but nothing about the matching prevented it.
+    "koln": "cologne",
 }
 
 _PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)
