@@ -18,6 +18,7 @@ import pytest
 from api.statpitch.client import (
     StatPitchRefusal,
     fetch_bets_today,
+    fetch_card,
     fetch_fixture_window,
 )
 from api.statpitch.models import (
@@ -211,6 +212,45 @@ class TestClientRefusalHandling:
 
         assert result.refusal.reason_code == "SELECTION_RULE_EXPERIMENTAL"
         assert result.caveat
+
+    @pytest.mark.anyio
+    async def test_the_card_is_asked_for_a_day_count_not_a_range(self):
+        """`/card/upcoming` is forward-only — a `days` count, no start date.
+
+        Confirmed against the live service: `days=3` on 2026-09-01 came back
+        `from=2026-09-01, to=2026-09-04`. Yesterday is unreachable, so the
+        client takes a count and the caller sizes it from the window's forward
+        half. This pins the parameter actually sent, because the previous
+        signature took a range and silently discarded half of it.
+        """
+        sent: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.update(dict(request.url.params))
+            return httpx.Response(200, json=_load("card_upcoming"))
+
+        async with httpx.AsyncClient(
+            base_url="https://statpitch.test", transport=httpx.MockTransport(handler)
+        ) as client:
+            await fetch_card(client, 1)
+
+        assert sent == {"days": "1"}
+
+    @pytest.mark.anyio
+    async def test_the_card_is_never_asked_for_zero_days(self):
+        """A zero-day window would return an empty card rather than today's."""
+        sent: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.update(dict(request.url.params))
+            return httpx.Response(200, json=_load("card_upcoming"))
+
+        async with httpx.AsyncClient(
+            base_url="https://statpitch.test", transport=httpx.MockTransport(handler)
+        ) as client:
+            await fetch_card(client, 0)
+
+        assert sent == {"days": "1"}
 
     @pytest.mark.anyio
     async def test_a_missing_fixture_artifact_still_raises(self):
