@@ -25,6 +25,15 @@ class TestNormalize:
         assert normalize("Stade Rennais") == "rennais"
         assert normalize("Olympique de Marseille") == "marseille"
 
+    def test_koln_reaches_the_english_name_espn_uses(self):
+        # A city with two clubs in it. "1. FC Koln" cleans to "koln", which
+        # shares a token with *Viktoria* Koln and scored 0.90 against it, while
+        # the right club — ESPN calls them Cologne — managed 0.57. The wrong one
+        # had no badge, so nothing bad was uploaded; nothing about the matching
+        # is what prevented it.
+        assert normalize("1. FC Köln") == normalize("FC Cologne")
+        assert normalize("Viktoria Köln") != normalize("1. FC Köln")
+
     def test_espanyol_resolves_rather_than_staying_ambiguous(self):
         # "espanyol barcelona" resembles Espanyol and Barcelona about equally,
         # so an alias settles it. Both sources call them Espanyol.
