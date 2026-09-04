@@ -6,7 +6,7 @@ across a dozen route handlers. Everything that gates on a tier reads from here.
 Three kinds of gate, because the pricing page sells three kinds of thing:
 
 - **A quota** — free accounts get three predictions a day.
-- **A scope** — free accounts see the five priced leagues, paid ones all twelve.
+- **A scope** — free accounts see five leagues, paid ones all fifteen.
 - **Features** — market breakdown, edge indicators, confidence, the ledger, API
   access.
 
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from api.statpitch.accounts.models import TIER_ORDER, Tier
-from api.statpitch.leagues import ALL_COMPETITIONS, STATPITCH_ODDS_COVERAGE
+from api.statpitch.leagues import ALL_COMPETITIONS, FREE_TIER_LEAGUES
 
 
 class Feature(StrEnum):
@@ -71,12 +71,14 @@ POLICIES: dict[Tier, TierPolicy] = {
     # "3 predictions per day", "The 5 priced leagues only", "1X2 win
     # probabilities", "Match of the Day pick".
     #
-    # The competition set is `STATPITCH_ODDS_COVERAGE` rather than a second list
-    # of the same five: "the leagues we can price" and "the leagues free sees"
-    # are the same idea, and writing it twice invites them to diverge.
+    # `FREE_TIER_LEAGUES`, not "every league we can price". Those were the same
+    # five until StatPitch added three more it can price, at which point the old
+    # shared constant would have widened the free tier by sixty per cent as a
+    # side effect of an upstream release. What free sees is a pricing decision;
+    # it now lives in a set that only this line reads.
     "free": TierPolicy(
         daily_predictions=3,
-        competitions=STATPITCH_ODDS_COVERAGE,
+        competitions=FREE_TIER_LEAGUES,
         features=frozenset(),
     ),
     # "Unlimited predictions", "All 12 competitions", plus everything except the

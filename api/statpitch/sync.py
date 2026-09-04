@@ -48,7 +48,7 @@ from api.statpitch.client import (
     fetch_matchday_odds,
 )
 from api.statpitch.clock import Window, current_window, to_local_date
-from api.statpitch.leagues import STATPITCH_ODDS_COVERAGE
+from api.statpitch.leagues import PRICED_LEAGUES
 from api.statpitch.models import (
     SPBetsToday,
     SPFixture,
@@ -500,12 +500,14 @@ async def run_sync(session: Session) -> SyncReport:
         report.warnings.append("No competitions configured; nothing to sync.")
         return report
 
-    uncovered = competitions - STATPITCH_ODDS_COVERAGE
+    uncovered = competitions - PRICED_LEAGUES
     if uncovered:
+        # Nothing else can price them now that The Odds API is gone, so these
+        # fixtures store their prediction and stay unpriced for good.
         report.warnings.append(
-            "StatPitch reports no odds source for "
-            f"{', '.join(sorted(uncovered))}; those fixtures are priced only if "
-            "The Odds API covers them."
+            "StatPitch publishes no odds for "
+            f"{', '.join(sorted(uncovered))}; those fixtures store a prediction "
+            "but will never carry a price or a bet."
         )
 
     # ── 1. Everything StatPitch has to say ───────────────────────────────────
