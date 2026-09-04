@@ -1218,9 +1218,26 @@ class CompetitionRead(SQLModel):
     name: str
     short_name: str
     icon_url: str | None = None
-    # Whether the free tier can see it, so the frontend can mark the seven cups
-    # as an upgrade rather than discovering it by getting an empty list back.
+
+    # Three independent facts about a competition, and they answer three
+    # different questions a reader actually asks. They were one flag when the
+    # same five leagues satisfied all of them; they are not any more.
+    #
+    # Whether the free tier can see it, so the seven cups can be shown as an
+    # upgrade rather than discovered by getting an empty list back.
     free_tier: bool = False
+    # Whether StatPitch publishes a market for it at all. False for every cup.
+    priced: bool = False
+    # Whether the selection rule is measured to earn here, and therefore
+    # whether this competition can ever produce a bet.
+    #
+    # This is the field that answers "why does this league never have picks".
+    # Nothing else can: an empty slate returns the same reason code whether a
+    # competition sits outside the rule's scope or simply had a quiet day, so a
+    # frontend inferring scope from absence will tell users the product is
+    # broken. The Eredivisie and Primeira Liga are `priced` and not
+    # `stakeable` — fully served, and never bettable.
+    stakeable: bool = False
 
 
 class SettledBetRead(SQLModel):

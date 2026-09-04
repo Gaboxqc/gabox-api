@@ -345,6 +345,27 @@ All under `/statpitch`. `GET` is public; the sync needs `X-API-KEY`.
 | `GET` | `/ledger` | The permanent record, paginated |
 | `POST` | `/sync` | Locked. The daily pass |
 
+### `GET /competitions`
+
+Fifteen rows, ungated. Three independent booleans, because they answer three
+different questions:
+
+| flag | true when |
+|---|---|
+| `free_tier` | a free account can see it |
+| `priced` | StatPitch publishes a market for it |
+| `stakeable` | the selection rule is measured to earn there |
+
+`stakeable` is the one to render. It is the only way to answer "why does this
+league never have picks" — an empty slate returns the same reason code whether a
+competition is outside the rule's scope or merely had a quiet day, so a frontend
+inferring scope from absence will report a working product as broken.
+
+It is read from the most recently synced day's `selection_rule_competitions`,
+not from a constant, because the scope is re-measured upstream and moves. A
+database that has never synced falls back to `STAKEABLE_LEAGUES` in
+`leagues.py`; nothing else should read that constant.
+
 ### `GET /fixtures`
 
 | Parameter | Type | Notes |

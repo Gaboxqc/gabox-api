@@ -254,3 +254,120 @@ def test_a_competition_with_no_badge_at_all_is_none():
 
     assert _pick_league_logo(_scoreboard()) is None
     assert _pick_league_logo({}) is None
+
+
+class TestTheThreeFlags:
+    """`free_tier`, `priced` and `stakeable` answer three different questions.
+
+    They named the same five leagues until StatPitch added three more it can
+    price, at which point every pair of them came apart.
+    """
+
+    def test_a_cup_is_none_of_the_three(self, client, engine):
+        with Session(engine) as db:
+            seed(db)
+
+        rows = {r["competition_id"]: r for r in client.get("/statpitch/competitions").json()}
+        cup = rows["UEFA.UCL"]
+
+        assert (cup["free_tier"], cup["priced"], cup["stakeable"]) == (False, False, False)
+
+    def test_a_core_league_is_all_three(self, client, engine):
+        with Session(engine) as db:
+            seed(db)
+
+        rows = {r["competition_id"]: r for r in client.get("/statpitch/competitions").json()}
+        epl = rows["ENG.PL"]
+
+        assert (epl["free_tier"], epl["priced"], epl["stakeable"]) == (True, True, True)
+
+    def test_the_super_lig_is_priced_and_stakeable_but_not_free(self, client, engine):
+        """The flags coming apart, case one: a paid league you can bet."""
+        with Session(engine) as db:
+            seed(db)
+
+        rows = {r["competition_id"]: r for r in client.get("/statpitch/competitions").json()}
+        tur = rows["TUR.SUPERLIG"]
+
+        assert tur["priced"] and tur["stakeable"]
+        assert not tur["free_tier"]
+
+    def test_the_eredivisie_is_priced_but_never_stakeable(self, client, engine):
+        """The flags coming apart, case two, and the one users will ask about.
+
+        Served in full — fixtures, predictions, prices — and permanently outside
+        the staking scope, because its own CLV estimate is negative. Without
+        this flag the frontend has nothing to say but "no picks", which reads as
+        a broken product rather than a measured result.
+        """
+        with Session(engine) as db:
+            seed(db)
+
+        rows = {r["competition_id"]: r for r in client.get("/statpitch/competitions").json()}
+
+        for league in ("NED.EREDIVISIE", "POR.PRIMEIRA"):
+            assert rows[league]["priced"], league
+            assert not rows[league]["stakeable"], league
+
+    def test_the_counts_match_the_four_sets(self, client, engine):
+        with Session(engine) as db:
+            seed(db)
+
+        rows = client.get("/statpitch/competitions").json()
+
+        assert len(rows) == 15
+        assert sum(1 for r in rows if r["priced"]) == 8
+        assert sum(1 for r in rows if r["stakeable"]) == 6
+        assert sum(1 for r in rows if r["free_tier"]) == 5
+
+
+class TestTheScopeComesFromWhatWasSynced:
+    """`stakeable` is read from the last synced day, not from a constant.
+
+    The scope is re-measured upstream and moves. A hardcoded answer would keep
+    reporting last season's, and the failure would be silent.
+    """
+
+    @staticmethod
+    def _bet_day(engine, scope):
+        from api.statpitch.clock import today_local
+        from api.statpitch.models import StatPitchBetDay
+
+        with Session(engine) as db:
+            db.add(StatPitchBetDay(match_date=today_local(), selection_rule_competitions=scope))
+            db.commit()
+
+    def test_an_unsynced_database_falls_back_to_the_constant(self, engine):
+        from api.statpitch.bets import stakeable_competitions
+        from api.statpitch.leagues import STAKEABLE_LEAGUES
+
+        with Session(engine) as db:
+            assert stakeable_competitions(db) == STAKEABLE_LEAGUES
+
+    def test_a_synced_scope_wins_over_the_constant(self, engine, client):
+        """The Primeira Liga is expected back on a later re-measurement. When
+        that happens the API must follow upstream, not our constant."""
+        from api.statpitch.bets import stakeable_competitions
+        from api.statpitch.leagues import STAKEABLE_LEAGUES
+
+        self._bet_day(engine, ["ENG.PL", "POR.PRIMEIRA"])
+
+        with Session(engine) as db:
+            seed(db)
+            assert stakeable_competitions(db) == frozenset({"ENG.PL", "POR.PRIMEIRA"})
+            assert stakeable_competitions(db) != STAKEABLE_LEAGUES
+
+        rows = {r["competition_id"]: r for r in client.get("/statpitch/competitions").json()}
+        assert rows["POR.PRIMEIRA"]["stakeable"]
+        assert not rows["ITA.SERIEA"]["stakeable"]
+
+    def test_an_empty_scope_is_ignored_rather_than_believed(self, engine):
+        """A scope of nothing is not a scope. Believing one malformed sync would
+        mark every competition unbettable across the whole product."""
+        from api.statpitch.bets import stakeable_competitions
+        from api.statpitch.leagues import STAKEABLE_LEAGUES
+
+        self._bet_day(engine, [])
+
+        with Session(engine) as db:
+            assert stakeable_competitions(db) == STAKEABLE_LEAGUES
