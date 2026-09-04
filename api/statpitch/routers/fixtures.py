@@ -35,7 +35,6 @@ from api.statpitch.models import (
 )
 from api.statpitch.motd import choose as choose_match_of_the_day
 from api.statpitch.motd import fixture_for as match_of_the_day_fixture
-from api.statpitch.odds_api import OddsUnavailable
 from api.statpitch.quota import remaining, unlock, unlocked_ids
 from api.statpitch.serialization import (
     FixtureFreeRead,
@@ -141,10 +140,10 @@ async def sync(db: SessionDep):
         ) from exc
     except StatPitchError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    except OddsUnavailable as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
-        ) from exc
+    # No 503 for a scores failure. It used to mean "the Odds API key is missing
+    # or its quota is spent", which cannot happen now that results are keyless —
+    # and a run that stored fixtures and prices but settled nothing is a partial
+    # success reported in `warnings`, not a failed request.
 
     return SyncResultRead(
         window=ThreeDayWindow(

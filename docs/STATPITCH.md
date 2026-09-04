@@ -42,7 +42,7 @@ So the three things ROI actually needs come from three different places:
 |---|---|---|
 | A selection | Ours, *and* StatPitch's | Two independent series, never averaged |
 | A real price | StatPitch `/card/upcoming` | 25-book panel; `odds` is the best quote |
-| A final score | The Odds API `/scores` | StatPitch has no results endpoint |
+| A final score | ESPN `/scoreboard` | StatPitch has no results endpoint |
 
 **The predictions are StatPitch's. The bets are both.** StatPitch now prices its
 own card and stakes its own rule, so there are three parallel track records:
@@ -554,7 +554,6 @@ have less to serve.
 | `STATPITCH_COMPETITIONS` | the five priced leagues | Comma-separated |
 | `STATPITCH_TIMEZONE` | `America/Managua` | Any IANA zone, validated at boot |
 | `STATPITCH_RETENTION_DAYS` | `1` | Days kept either side of today |
-| `ODDS_API_KEY` | none | Results only. Without it nothing settles and no ROI accrues |
 | `CORS_ORIGINS` | localhost `5173`–`5175`, localhost `8000`, `gabrielmayorga.dev`, `www.gabrielmayorga.dev` | Comma-separated or a JSON list |
 
 ### CORS
@@ -571,14 +570,17 @@ correct behaviour and not evidence of a fault.
 
 ### Quota
 
-Prices are free now — StatPitch bills nothing and returns the whole card in
-one request. What is left on The Odds API is **scores only**: one request per
-league per run, roughly 150/month across five leagues against the 500/month free
-tier, with nothing else competing for the budget.
+There is none. **This API holds no third-party credential at all.**
 
-That is the whole reason the price source moved. Under the old arrangement
-`h2h` alone cost ~150/month and adding totals and BTTS took it to ~450 before
-scores were counted, which is why only `h2h` was ever enabled.
+Prices come from StatPitch, keyed by `fixture_id` and free to us. Scores come
+from ESPN's scoreboard, which is keyless and unmetered — one request per
+competition per run, covering the whole lookback as a date range.
+
+The Odds API is gone from this codebase entirely. Its 500/month allowance is
+spent by the model API on the 25-book price panel behind the card, and asking it
+for scores here would have made prices and results compete for one budget.
+Prices are the half with no free substitute; results are the half ESPN gives
+away.
 
 ---
 
@@ -590,7 +592,8 @@ scores were counted, which is why only `h2h` was ever enabled.
 |---|---|
 | `fetched` high, `priced` 0 | StatPitch has not published this matchday block yet — check `warnings` |
 | `unpriced` high | Normal days ahead of kickoff: the price feed publishes per matchday block |
-| `settled` stuck at 0 | Club names failed to join a score; see `matching.py` |
+| `settled` stuck at 0 | Club names failed to join a score, or ESPN is unreachable — check `warnings` |
+| `ledgered` 0 while `settled` rises | Correct when the settled fixtures carried no pick. A fixture with no price owes the ledger nothing |
 | `settled` 0 with finished matches | Scores lag; the next run picks them up |
 | `pruned` 0 with old fixtures | Correct — they are unbanked and being protected |
 | ROI null after weeks | Nothing ever priced, so no bet was ever placed |
@@ -601,9 +604,14 @@ scores were counted, which is why only `h2h` was ever enabled.
 whole class of mismatch this guards against cannot happen to a price any more.
 It can still happen to a score, which is why the module has not gone anywhere.
 
-StatPitch uses full registered names, The Odds API short trading names. The join
+StatPitch uses full registered names, ESPN short trading names. The join
 normalises both (accents, corporate prefixes, founding years) and then scores
-the **pair**. Matching one name at a time is unsafe: `RCD Espanyol de Barcelona`
+the **pair**.
+
+This got easier when scores moved to ESPN. `statpitch_team` was populated from
+ESPN during the crest backfill and `_ALIASES` is tuned for ESPN's vocabulary —
+the Köln entry exists because ESPN calls them Cologne — so the join now runs
+against the names the alias table was built for. Matching one name at a time is unsafe: `RCD Espanyol de Barcelona`
 resembles `Barcelona` about as much as it resembles `Espanyol`, and only the
 away side breaks the tie.
 
@@ -620,7 +628,6 @@ match's scoreline to a bet and corrupt the ledger permanently.
 | `404` | `/fixtures/{id}` or `/fixtures/today/best` with nothing to return |
 | `422` | Unknown `basis` on the ledger, or an unknown `day` on `/fixtures` — a typo, not a query with no results |
 | `502` | StatPitch unreachable, or refused with a reason code |
-| `503` | The Odds API key is missing, or its quota is exhausted (scores) |
 
 A StatPitch refusal is a 200 upstream but a **502 here**: `NO_FIXTURE_SOURCE`
 means its fixture artifact failed to load, which is a broken deploy rather than
