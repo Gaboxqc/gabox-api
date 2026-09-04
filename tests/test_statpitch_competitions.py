@@ -8,14 +8,14 @@ now meaning something, and meaning it in one place.
 from sqlmodel import Session, select
 
 from api.statpitch.competitions import StatPitchCompetition, all_competitions, by_id, seed
-from api.statpitch.leagues import ALL_COMPETITIONS, STATPITCH_ODDS_COVERAGE
+from api.statpitch.leagues import ALL_COMPETITIONS, FREE_TIER_LEAGUES
 
 # ── Seeding ──────────────────────────────────────────────────────────────────
 
 
 def test_all_twelve_are_seeded(engine):
     with Session(engine) as db:
-        assert seed(db) == 12
+        assert seed(db) == 15
         assert {row.competition_id for row in all_competitions(db)} == ALL_COMPETITIONS
 
 
@@ -24,7 +24,7 @@ def test_seeding_twice_adds_nothing(engine):
     with Session(engine) as db:
         seed(db)
         assert seed(db) == 0
-        assert len(all_competitions(db)) == 12
+        assert len(all_competitions(db)) == 15
 
 
 def test_seeding_leaves_an_existing_icon_alone(engine):
@@ -70,7 +70,7 @@ def test_the_endpoint_lists_every_competition(client, engine):
         seed(db)
 
     body = client.get("/statpitch/competitions").json()
-    assert len(body) == 12
+    assert len(body) == 15
     assert {row["competition_id"] for row in body} == ALL_COMPETITIONS
 
 
@@ -92,8 +92,10 @@ def test_the_endpoint_says_which_are_free(client, engine):
     body = client.get("/statpitch/competitions").json()
     free = {row["competition_id"] for row in body if row["free_tier"]}
 
-    assert free == STATPITCH_ODDS_COVERAGE
+    assert free == FREE_TIER_LEAGUES
     assert len(free) == 5
+    # Ten of fifteen are an upgrade, not an empty list.
+    assert len(body) - len(free) == 10
 
 
 def test_an_unseeded_registry_returns_an_empty_list(client):

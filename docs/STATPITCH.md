@@ -56,19 +56,44 @@ more — see §8, where matching now covers results only.
 **Fixtures are temporary, the record is permanent.** Two tables, two lifetimes —
 see [The three-day window](#2-the-three-day-window).
 
-**Five competitions are priced.** StatPitch covers twelve; only five have an
-odds market we can price against, and each one costs API quota. The rest can be
-synced for predictions but will never produce a bet.
+**Four sets of competitions, and they are not the same set.** They were, until
+StatPitch added three leagues it can price. Collapsing any two of these back
+into one constant is how the free tier silently gains a league:
 
-| competition_id | name | priced by default |
+| set | n | what it means |
 |---|---|---|
-| `ENG.PL` | Premier League | yes |
-| `ESP.LALIGA` | La Liga | yes |
-| `GER.BUNDESLIGA` | Bundesliga | yes |
-| `ITA.SERIEA` | Serie A | yes |
-| `FRA.LIGUE1` | Ligue 1 | yes |
-| `ENG.FA_CUP`, `GER.DFB_POKAL`, `ITA.COPPA_ITALIA`, `UEFA.UCL`, `UEFA.UEL` | cups | no, but a sport key exists |
-| `ESP.COPA_DEL_REY`, `FRA.COUPE_DE_FRANCE` | cups | no sport key at all |
+| all competitions | 15 | everything StatPitch serves |
+| priced | 8 | has a market — what we sync |
+| stakeable | 6 | measured to earn, so a bet is possible |
+| free tier | 5 | a promise on the pricing page |
+
+| competition_id | name | priced | stakeable | free |
+|---|---|---|---|---|
+| `ENG.PL` | Premier League | yes | yes | yes |
+| `ESP.LALIGA` | LaLiga | yes | yes | yes |
+| `GER.BUNDESLIGA` | Bundesliga | yes | yes | yes |
+| `ITA.SERIEA` | Serie A | yes | yes | yes |
+| `FRA.LIGUE1` | Ligue 1 | yes | yes | yes |
+| `TUR.SUPERLIG` | Super Lig | yes | yes | no |
+| `POR.PRIMEIRA` | Primeira Liga | yes | **no** | no |
+| `NED.EREDIVISIE` | Eredivisie | yes | **no** | no |
+| the seven cups | — | no | no | no |
+
+The Eredivisie and Primeira Liga are served in full — fixtures, predictions,
+prices — and can never produce a bet. That is a **measurement, not a gap**: the
+Eredivisie's own CLV estimate is negative (−0.22%, t=−0.82) and the Primeira
+Liga's is positive but unresolvable at n=974 (+0.27%, t=+1.07). The second may
+return on a later re-measurement, so neither is hard-coded as permanent.
+
+Note the ID prefixes: `POR`/`NED`/`TUR` are Club Elo ISO-3 country codes, not
+the ISO-2 codes you might expect. Treat the whole string as opaque and match it
+exactly.
+
+Beware one trap when reading an empty slate: **no reason code distinguishes
+"this league is outside the rule's scope" from "nothing qualified today"** —
+both come back as `NO_QUALIFYING_SELECTION`. The authoritative answer is
+`selection_rule.competitions` on `/bets/today`. Read it; do not infer scope from
+absence.
 
 ---
 
@@ -551,7 +576,7 @@ have less to serve.
 |---|---|---|
 | `STATPITCH_BASE_URL` | `https://statpitch-api.onrender.com` | |
 | `STATPITCH_TIMEOUT_SECONDS` | `60` | The free instance sleeps; the first call pays a cold start of tens of seconds |
-| `STATPITCH_COMPETITIONS` | the five priced leagues | Comma-separated |
+| `STATPITCH_COMPETITIONS` | the eight priced leagues | Comma-separated |
 | `STATPITCH_TIMEZONE` | `America/Managua` | Any IANA zone, validated at boot |
 | `STATPITCH_RETENTION_DAYS` | `1` | Days kept either side of today |
 | `CORS_ORIGINS` | localhost `5173`–`5175`, localhost `8000`, `gabrielmayorga.dev`, `www.gabrielmayorga.dev` | Comma-separated or a JSON list |

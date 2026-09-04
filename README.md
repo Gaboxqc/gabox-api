@@ -172,7 +172,7 @@ Each of the three resources above carries per-language content:
 |---|---|---|
 | `POST` | `/statpitch/sync` | 🔒 The full daily pass. Idempotent |
 | `GET` | `/statpitch/fixtures` | The three-day window. Filter by `day`, `competition_id`, `value_bets_only` |
-| `GET` | `/statpitch/competitions` | All twelve, with names and icons. Ungated |
+| `GET` | `/statpitch/competitions` | All fifteen, with names and icons. Ungated |
 | `GET` | `/statpitch/fixtures/window` | The three local dates currently cached |
 | `GET` | `/statpitch/fixtures/yesterday` \| `/today` \| `/tomorrow` | |
 | `GET` | `/statpitch/fixtures/today/best` | Match of the Day — picked once by the day's first sync |
@@ -320,7 +320,7 @@ What a caller sees is decided in one place, [api/statpitch/tiers.py](api/statpit
 
 | | Free | Pro | Elite |
 |---|---|---|---|
-| Competitions | the 5 priced leagues | all 12 | all 12 |
+| Competitions | 5 free-tier leagues | all 15 | all 15 |
 | 1X2 probabilities + Match of the Day | ✅ | ✅ | ✅ |
 | Market breakdown, edge & Kelly, confidence | — | ✅ | ✅ |
 | Settled ledger & ROI | — | ✅ | ✅ |
@@ -427,7 +427,7 @@ is that table, and the four now hold a real foreign key.
 - **Keyed on the natural key.** `competition_id` is already stable, already
   unique and already what every filter matches on, so the keys point straight at
   it — normalised without renaming a column or rewriting a query.
-- `GET /statpitch/competitions` returns all twelve with `name`, `short_name` and
+- `GET /statpitch/competitions` returns all fifteen with `name`, `short_name` and
   `icon_url`, plus `free_tier` so the seven cups can be shown as an upgrade
   rather than discovered by getting an empty list back. Ungated: which
   competitions exist is navigation, not product.
@@ -481,7 +481,7 @@ Needs the optional extra (`pip install -e ".[crests]"`) and R2 credentials.
 
 - **Source is ESPN's public team list** — no key, and it carries a dark-background
   badge variant, which matters on a near-black UI. Measured coverage: all 96
-  clubs across the five priced leagues and both UEFA competitions, none missing a
+  clubs across the eight priced leagues and both UEFA competitions, none missing a
   badge. The cups have gaps, all amateur and lower-division sides.
 - **The bytes are copied into R2, not hotlinked.** ESPN's endpoint is
   undocumented, so this stays a *seeding-time* dependency: if it changes shape
