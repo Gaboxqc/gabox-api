@@ -13,8 +13,10 @@ one rather than by hand.
 Prices come from StatPitch now, not The Odds API. It publishes its own card
 against a 25-book panel, keyed by `fixture_id`, so a price is joined by identity
 rather than by matching two spellings of a club's name — and at no quota cost.
-The Odds API is still here, but only for results: StatPitch has no results
-endpoint, so without it nothing settles and there is no ROI at all.
+Results come from ESPN, keyed by the same league slug the crests use. StatPitch
+has no results endpoint — its own ledger carries `result: null` — so without an
+external source nothing settles and there is no ROI at all. Nothing in this
+module needs an API key any more.
 
 Four upstream calls make one pass, in one client, because the free instance
 sleeps after fifteen minutes and the cold start is worth paying once:
@@ -56,7 +58,6 @@ from api.statpitch.models import (
     StatPitchSelection,
 )
 from api.statpitch.motd import ensure as ensure_match_of_the_day
-from api.statpitch.odds_api import OddsUnavailable
 from api.statpitch.pricing import apply_pricing, market_for
 from api.statpitch.scores_service import fetch_scores
 from api.statpitch.selections import translate
@@ -637,12 +638,13 @@ async def run_sync(session: Session) -> SyncReport:
     ).all()
 
     if unsettled:
-        try:
-            scores = await fetch_scores(competitions, days_back=3)
-            report.warnings.extend(scores.warnings)
-            report.settled = apply_scores(session, unsettled, scores.scores)
-        except OddsUnavailable as exc:
-            report.warnings.append(f"No scores this run: {exc}")
+        # `fetch_scores` never raises: ESPN needs no credential and bills
+        # nothing, so the whole class of "not configured" and "quota exhausted"
+        # failure is gone. A competition that fails becomes a warning and the
+        # rest still settle.
+        scores = await fetch_scores(competitions, days_back=3)
+        report.warnings.extend(scores.warnings)
+        report.settled = apply_scores(session, unsettled, scores.scores)
 
     # ── 4. Ledger, then prune ────────────────────────────────────────────────
     settled = session.exec(

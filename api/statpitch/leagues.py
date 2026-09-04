@@ -1,12 +1,13 @@
-"""StatPitch competitions mapped to The Odds API sport keys.
+"""StatPitch competitions, and how each maps onto ESPN.
 
-StatPitch covers twelve competitions and reports `odds_coverage` for five of
-them. That flag describes *StatPitch's* own odds source, not ours — we price
-from The Odds API independently, so a competition StatPitch marks uncovered can
-still be priced here if a sport key exists for it.
+Twelve competitions, five of them synced by default via
+`settings.statpitch_competitions`. StatPitch reports `odds_coverage` for the
+same five, but that flag describes *its* odds source rather than ours.
 
-Every request costs quota, though, so `settings.statpitch_competitions` decides
-what actually gets synced. The five leagues are the default.
+There is one external mapping left. Prices come from StatPitch keyed by
+`fixture_id`, so nothing has to be looked up for them — but final scores and
+club crests both come from ESPN, and both are addressed by the same league slug.
+One mapping, two consumers.
 """
 
 # Competitions StatPitch itself can price. Kept as a set so the sync can flag a
@@ -21,23 +22,7 @@ STATPITCH_ODDS_COVERAGE: frozenset[str] = frozenset(
     }
 )
 
-# The Odds API sport key per competition. Copa del Rey and Coupe de France are
-# absent on purpose: no stable key exists for them, so they would only ever
-# return predictions with no price attached.
-COMPETITION_SPORT_KEYS: dict[str, str] = {
-    "ENG.PL": "soccer_epl",
-    "ESP.LALIGA": "soccer_spain_la_liga",
-    "GER.BUNDESLIGA": "soccer_germany_bundesliga",
-    "ITA.SERIEA": "soccer_italy_serie_a",
-    "FRA.LIGUE1": "soccer_france_ligue_one",
-    "ENG.FA_CUP": "soccer_fa_cup",
-    "GER.DFB_POKAL": "soccer_germany_dfb_pokal",
-    "ITA.COPPA_ITALIA": "soccer_italy_coppa_italia",
-    "UEFA.UCL": "soccer_uefa_champs_league",
-    "UEFA.UEL": "soccer_uefa_europa_league",
-}
-
-# ESPN's league slug per competition, used only to seed club crests.
+# ESPN's league slug per competition, used for club crests and final scores.
 #
 # ESPN publishes a team list per league at
 # `site.api.espn.com/apis/site/v2/sports/soccer/{slug}/teams`, which carries a
@@ -47,9 +32,14 @@ COMPETITION_SPORT_KEYS: dict[str, str] = {
 # lower-division sides in the early rounds, which no free source covers either.
 #
 # The endpoint is undocumented, which is exactly why the crest bytes are copied
-# into our own storage rather than hotlinked: this is a seeding-time dependency,
-# not a runtime one, and if it disappears the crests already fetched keep
-# serving.
+# into our own storage rather than hotlinked: if it disappears the crests
+# already fetched keep serving.
+#
+# The `/scoreboard` endpoint under the same slug is what settles fixtures. That
+# one *is* a runtime dependency, and unlike the crests it cannot be cached
+# ahead of time — a result does not exist until the match is played. It is
+# keyless and unmetered, and a failure is treated as a warning rather than an
+# error, so a bad day there costs a settlement run and nothing more.
 ESPN_LEAGUE_SLUGS: dict[str, str] = {
     "ENG.PL": "eng.1",
     "ESP.LALIGA": "esp.1",
@@ -83,8 +73,9 @@ ALL_COMPETITIONS: frozenset[str] = frozenset(
 )
 
 
-def sport_key_for(competition_id: str) -> str | None:
-    return COMPETITION_SPORT_KEYS.get(competition_id)
+def espn_slug_for(competition_id: str) -> str | None:
+    """The ESPN league slug, used for both crests and final scores."""
+    return ESPN_LEAGUE_SLUGS.get(competition_id)
 
 
 # How each competition is named, as ESPN names it. `(name, short_name)`.

@@ -1,0 +1,145 @@
+{
+  "events": [
+    {
+      "id": "401879294",
+      "date": "2026-08-28T19:00Z",
+      "competitions": [
+        {
+          "status": {
+            "type": {
+              "id": "28",
+              "name": "STATUS_FULL_TIME",
+              "state": "post",
+              "completed": true,
+              "description": "Full Time",
+              "detail": "FT",
+              "shortDetail": "FT"
+            }
+          },
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "1",
+              "team": {
+                "displayName": "Crystal Palace"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "4",
+              "team": {
+                "displayName": "Manchester City"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401879314",
+      "date": "2026-08-29T11:30Z",
+      "competitions": [
+        {
+          "status": {
+            "type": {
+              "id": "28",
+              "name": "STATUS_FULL_TIME",
+              "state": "post",
+              "completed": true,
+              "description": "Full Time",
+              "detail": "FT",
+              "shortDetail": "FT"
+            }
+          },
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "2",
+              "team": {
+                "displayName": "Liverpool"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "2",
+              "team": {
+                "displayName": "Nottingham Forest"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401879296",
+      "date": "2026-08-29T14:00Z",
+      "competitions": [
+        {
+          "status": {
+            "type": {
+              "id": "28",
+              "name": "STATUS_FULL_TIME",
+              "state": "post",
+              "completed": true,
+              "description": "Full Time",
+              "detail": "FT",
+              "shortDetail": "FT"
+            }
+          },
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "1",
+              "team": {
+                "displayName": "AFC Bournemouth"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "1",
+              "team": {
+                "displayName": "Everton"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401879285",
+      "date": "2026-09-12T14:00Z",
+      "competitions": [
+        {
+          "status": {
+            "type": {
+              "id": "1",
+              "name": "STATUS_SCHEDULED",
+              "state": "pre",
+              "completed": false,
+              "description": "Scheduled",
+              "detail": "Sat, September 12th at 10:00 AM EDT",
+              "shortDetail": "Scheduled"
+            }
+          },
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "0",
+              "team": {
+                "displayName": "AFC Bournemouth"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "0",
+              "team": {
+                "displayName": "Brentford"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "_note": "real ESPN scoreboard capture, eng.1, trimmed to the fields consumed"
+}

@@ -37,10 +37,9 @@ api/
   statpitch/     Football predictions, pricing and track record
     client.py      StatPitch HTTP client; batched, retried, cold-start aware
     clock.py       The single definition of "today" (local, not UTC)
-    leagues.py     Competition -> Odds API sport key
-    matching.py    Joins StatPitch club names to The Odds API's (results only)
+    leagues.py     Competition -> ESPN league slug (crests and scores)
+    matching.py    Joins StatPitch club names to ESPN's (results only)
     selections.py  Translates StatPitch's selection names into ours
-    odds_api.py    What is left of The Odds API: credentials, and scores
     scores_service.py Final scores — StatPitch has no results endpoint
     pricing.py     Expected value and Kelly staking
     settlement.py  Settling, banking the ledger, pruning the cache
