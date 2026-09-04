@@ -1,0 +1,72 @@
+{
+  "date": "2026-09-04",
+  "bets": [],
+  "count": 0,
+  "by_basis": {},
+  "total_exposure": 0,
+  "assessed": 9,
+  "qualified_by_rule": 1,
+  "selection_rule": {
+    "status": "experimental",
+    "reference": "odds_pinnacle",
+    "threshold": 0.0,
+    "market_families": [
+      "1x2"
+    ],
+    "competitions": [
+      "ENG.PL",
+      "ESP.LALIGA",
+      "FRA.LIGUE1",
+      "GER.BUNDESLIGA",
+      "ITA.SERIEA",
+      "TUR.SUPERLIG"
+    ],
+    "max_per_day": 3,
+    "evidence": "data/selection_rule_study.json",
+    "fallback_enabled": true
+  },
+  "config_status": "experimental",
+  "disclaimer": "Simulation and analysis only. StatPitch does not place wagers, hold funds, or integrate with any bookmaker. Stake fractions are advisory output.",
+  "caveat": "selection_rule.status=experimental. The rule has five seasons of measured CLV; the 25-book panel it now runs on has none, so its calibration is inherited rather than re-measured. Treat these as a live test of a measured rule on a new panel, not a validated edge.",
+  "refusal": {
+    "available": false,
+    "reason_code": "SELECTION_RULE_EXPERIMENTAL",
+    "reason": "selection_rule.status=experimental. The rule has five seasons of measured CLV; the 25-book panel it now runs on has none, so its calibration is inherited rather than re-measured. Treat these as a live test of a measured rule on a new panel, not a validated edge.",
+    "measurement": {
+      "selection_rule_status": "candidate",
+      "candidate_reference": "betfair_exchange",
+      "pinnacle_clv_pre_break": 0.0051,
+      "pinnacle_clv_pre_break_t": 7.53,
+      "pinnacle_in_live_feed": false,
+      "betfair_clv_post_break": 0.0251,
+      "betfair_clv_post_break_t": 7.86,
+      "unselected_baseline_post_break": -0.0003,
+      "seasons_available_post_break": 1,
+      "seasons_required": 2,
+      "evidence": "data/selection_rule_study.json"
+    }
+  },
+  "reason": "No selection cleared the rule today. 9 assessed, 1 qualified, none sized.",
+  "empty_because": {
+    "card_dates": [
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-29",
+      "2026-08-30",
+      "2026-08-31",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-05",
+      "2026-09-06",
+      "2026-09-07"
+    ],
+    "fixtures_today": 6,
+    "card_covers_today": true,
+    "cause": "assessed_but_nothing_qualified"
+  },
+  "model_version": "elo-poisson-2.0.0.dev0",
+  "config_version": "dec-2026.08.1-experimental",
+  "schema_version": 1,
+  "generated_at": "2026-09-04T13:29:59+00:00"
+}

@@ -478,6 +478,11 @@ def _upsert_bet_day(session: Session, day: date, payload: SPBetsToday) -> None:
     row.config_status = payload.config_status or rule.status
     row.selection_rule_status = rule.status
     row.selection_rule = rule.model_dump(mode="json")
+    # Lifted out of the blob because slice C filters on it. `or None` rather
+    # than an empty list: upstream not publishing a scope and upstream
+    # publishing an empty one would otherwise be indistinguishable, and only the
+    # first is true today for an older config.
+    row.selection_rule_competitions = list(rule.competitions) or None
     row.by_basis = payload.by_basis or None
     row.refusal_reason_code = refusal.reason_code if refusal else None
     row.refusal_reason = refusal.reason if refusal else None

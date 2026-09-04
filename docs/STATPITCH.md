@@ -92,8 +92,18 @@ exactly.
 Beware one trap when reading an empty slate: **no reason code distinguishes
 "this league is outside the rule's scope" from "nothing qualified today"** —
 both come back as `NO_QUALIFYING_SELECTION`. The authoritative answer is
-`selection_rule.competitions` on `/bets/today`. Read it; do not infer scope from
-absence.
+`selection_rule_competitions` on `/bets/today`, which we store per day and serve
+as its own field. Read it; do not infer scope from absence.
+
+`empty_because.cause` separates the two commonest empty days:
+`fixtures_today_carry_no_price` means the feed has not published this matchday
+block yet, while `assessed_but_nothing_qualified` means it did and nothing
+cleared the rule. The first resolves itself; the second is the normal case.
+
+`selection_rule_competitions` is `null` for any day synced before the field
+shipped. That means "not recorded", not "scope of nothing" — `STAKEABLE_LEAGUES`
+in `leagues.py` is the fallback, and it is only ever a fallback: the scope is
+re-measured upstream and moves.
 
 ---
 

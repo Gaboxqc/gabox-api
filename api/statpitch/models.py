@@ -275,6 +275,24 @@ class SPSelectionRule(BaseModel):
     max_per_day: int | None = None
     evidence: str | None = None
 
+    # Where the rule has been *measured* to earn, and therefore the only
+    # competitions that can produce a bet. Not every priced league qualifies:
+    # StatPitch prices eight and this currently names six.
+    #
+    # This is the authoritative answer to "why does this league never have
+    # picks", and there is no other way to ask. An empty slate returns
+    # `NO_QUALIFYING_SELECTION` whether the league is outside the scope or
+    # simply had nothing qualify today, so absence is not readable — the scope
+    # has to be read directly.
+    #
+    # Re-measured upstream, so it moves. The Primeira Liga sits just outside on
+    # sample size rather than on a negative estimate and is expected to be
+    # reconsidered, which is why nothing derives this from a local constant.
+    competitions: list[str] = []
+    # Undocumented upstream but published. Carried so it lands in the stored
+    # rule blob rather than being dropped on the floor.
+    fallback_enabled: bool | None = None
+
 
 class SPEmptyBecause(BaseModel):
     """Why a day produced no bet. A quiet day, not a failure."""
@@ -858,6 +876,18 @@ class StatPitchBetDay(SQLModel, table=True):
     selection_rule: dict[str, Any] | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
+    # The rule's measured scope, lifted out of the blob above into its own
+    # column because it is the one part of the rule that gets *queried* rather
+    # than displayed: it decides whether a competition can produce a bet at all,
+    # and a JSON blob is a poor place to ask that from.
+    #
+    # Stored per day rather than per selection. The rule is a property of the
+    # day's card, and the day row is already the thing that records what a day
+    # was produced under — so a scope change on a later re-measurement leaves
+    # every earlier day reading correctly.
+    selection_rule_competitions: list[str] | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
     by_basis: dict[str, int] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
     # The advisory refusal, which is a caveat rather than a failure. Stored so
@@ -1164,6 +1194,11 @@ class BetsTodayRead(SQLModel):
 
     by_basis: dict[str, int] | None
     selection_rule: dict[str, Any] | None
+    # Which competitions the rule is measured to earn in. Surfaced as its own
+    # field rather than left inside `selection_rule`, because it is the only
+    # way to tell "this league is outside the scope" from "nothing qualified
+    # today" — both of which otherwise look like an empty slate.
+    selection_rule_competitions: list[str] | None
     config_status: str | None
     selection_rule_status: str | None
 
