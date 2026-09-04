@@ -21,6 +21,7 @@ from datetime import date
 from sqlmodel import Session, col, select
 
 from api.statpitch.accounts.models import Tier
+from api.statpitch.leagues import STAKEABLE_LEAGUES
 from api.statpitch.models import (
     BetPickRead,
     BetsTodayRead,
@@ -55,6 +56,35 @@ def caveat_for(status: str | None) -> str | None:
         "fitted, so its calibration is inherited rather than measured on the price "
         "panel it now runs on. Treat it as a live test of a rule, not a validated edge."
     )
+
+
+def stakeable_competitions(session: Session) -> frozenset[str]:
+    """Which competitions can currently produce a bet.
+
+    Read from the most recently synced day rather than from a constant, and the
+    difference matters. The scope is a **measurement**, re-run upstream against
+    accumulating closing-line data, and it moves: the Primeira Liga sits outside
+    it on sample size (n=974, t=+1.07) rather than on a negative estimate, and is
+    expected to be reconsidered. A hardcoded set would keep answering last
+    season's question, and the first symptom would be our UI telling users a
+    league cannot be bet while the service quietly bets it.
+
+    `STAKEABLE_LEAGUES` is the fallback for a database that has never synced —
+    a fresh deploy answering `/competitions` before its first sync. It is not
+    the authority, and nothing else should read it.
+
+    Ordered by date descending rather than by `synced_at`: a re-sync of an older
+    day must not outrank the newest measurement we hold.
+    """
+    stored = session.exec(
+        select(StatPitchBetDay.selection_rule_competitions)
+        .where(col(StatPitchBetDay.selection_rule_competitions).is_not(None))
+        .order_by(col(StatPitchBetDay.match_date).desc())
+    ).first()
+
+    # Empty as well as null: a scope of nothing is not a scope, and returning it
+    # would mark every competition unbettable on one malformed sync.
+    return frozenset(stored) if stored else STAKEABLE_LEAGUES
 
 
 def _staked_selections(
@@ -147,6 +177,7 @@ def build_bets_today(session: Session, day: date, tier: Tier) -> BetsTodayRead:
             empty_because=None,
             by_basis=None,
             selection_rule=None,
+            selection_rule_competitions=None,
             config_status=config_status,
             selection_rule_status=rule_status,
             model_version=None,
@@ -173,6 +204,7 @@ def build_bets_today(session: Session, day: date, tier: Tier) -> BetsTodayRead:
         empty_because=stored.empty_because,
         by_basis=stored.by_basis,
         selection_rule=stored.selection_rule,
+        selection_rule_competitions=stored.selection_rule_competitions,
         config_status=config_status,
         selection_rule_status=rule_status,
         model_version=stored.model_version,

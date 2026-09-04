@@ -314,3 +314,120 @@ class TestStats:
         body = client.get("/statpitch/fixtures/today/value-bets?basis=1x2", headers=auth).json()
 
         assert [row["home_team"] for row in body] == ["Strong Draw Pick", "Weak Home Pick"]
+
+
+class TestTheRuleScopeSurvivesTheHop:
+    """Stored on the day row by the sync, served by `/bets/today`.
+
+    The point of storing it at all: a league outside the scope and a league that
+    simply had a quiet day both return an empty slate, so the frontend needs the
+    scope itself to tell a reader which one they are looking at.
+    """
+
+    SCOPE = ["ENG.PL", "ESP.LALIGA", "FRA.LIGUE1", "GER.BUNDESLIGA", "ITA.SERIEA", "TUR.SUPERLIG"]
+
+    def test_it_reaches_the_read_model(self, engine):
+        _bet_day(engine, selection_rule_competitions=self.SCOPE)
+
+        with Session(engine) as db:
+            result = build_bets_today(db, today_local(), "pro")
+
+        assert result.selection_rule_competitions == self.SCOPE
+
+    def test_it_is_served_over_http(self, client, auth, engine):
+        _bet_day(engine, selection_rule_competitions=self.SCOPE)
+
+        body = client.get("/statpitch/bets/today", headers=auth).json()
+
+        assert body["selection_rule_competitions"] == self.SCOPE
+        assert "NED.EREDIVISIE" not in body["selection_rule_competitions"]
+
+    def test_a_day_stored_before_the_scope_existed_reads_as_null(self, engine):
+        """Null means "not recorded", which is true of every row written before
+        the field shipped. It must not read as "scope of nothing"."""
+        _bet_day(engine)
+
+        with Session(engine) as db:
+            result = build_bets_today(db, today_local(), "pro")
+
+        assert result.selection_rule_competitions is None
+
+    def test_an_unsynced_day_reads_as_null_too(self, engine, staked):
+        staked()
+
+        with Session(engine) as db:
+            result = build_bets_today(db, today_local(), "pro")
+
+        assert result.bets
+        assert result.selection_rule_competitions is None
+
+
+class TestTheSyncWritesTheScope:
+    """The write half, driven by a real captured payload.
+
+    The tests above set the column directly, which proves storage reaches the
+    reader but not that the sync ever fills it. This drives `_upsert_bet_day`
+    with the response the live service actually sends.
+    """
+
+    @staticmethod
+    def _payload(name: str):
+        import json
+        from pathlib import Path
+
+        from api.statpitch.models import SPBetsToday
+
+        path = Path(__file__).parent / "fixtures" / "statpitch" / f"{name}.json"
+        return SPBetsToday.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+    def test_the_scope_is_lifted_out_of_the_rule_blob(self, engine):
+        from sqlmodel import select
+
+        from api.statpitch.models import StatPitchBetDay
+        from api.statpitch.sync import _upsert_bet_day
+
+        with Session(engine) as db:
+            _upsert_bet_day(db, today_local(), self._payload("bets_today_nothing_qualified"))
+            row = db.exec(select(StatPitchBetDay)).one()
+
+        assert row.selection_rule_competitions == [
+            "ENG.PL",
+            "ESP.LALIGA",
+            "FRA.LIGUE1",
+            "GER.BUNDESLIGA",
+            "ITA.SERIEA",
+            "TUR.SUPERLIG",
+        ]
+        # Still present in the blob too — the column is a lift, not a move.
+        assert row.selection_rule["competitions"] == row.selection_rule_competitions
+        assert row.selection_rule["fallback_enabled"] is True
+
+    def test_a_payload_with_no_scope_stores_null_not_an_empty_list(self, engine):
+        """Upstream not publishing a scope and upstream publishing an empty one
+        would otherwise be indistinguishable, and only the first is true."""
+        from sqlmodel import select
+
+        from api.statpitch.models import StatPitchBetDay
+        from api.statpitch.sync import _upsert_bet_day
+
+        with Session(engine) as db:
+            _upsert_bet_day(db, today_local(), self._payload("bets_today"))
+            row = db.exec(select(StatPitchBetDay)).one()
+
+        assert row.selection_rule_competitions is None
+
+    def test_re_syncing_updates_the_scope_in_place(self, engine):
+        """One row per day. A re-measurement lands on the same date rather than
+        appending a second row for it."""
+        from sqlmodel import select
+
+        from api.statpitch.models import StatPitchBetDay
+        from api.statpitch.sync import _upsert_bet_day
+
+        with Session(engine) as db:
+            _upsert_bet_day(db, today_local(), self._payload("bets_today"))
+            _upsert_bet_day(db, today_local(), self._payload("bets_today_nothing_qualified"))
+            rows = db.exec(select(StatPitchBetDay)).all()
+
+        assert len(rows) == 1
+        assert rows[0].selection_rule_competitions is not None

@@ -1,18 +1,74 @@
 """StatPitch competitions, and how each maps onto ESPN.
 
-Twelve competitions, five of them synced by default via
-`settings.statpitch_competitions`. StatPitch reports `odds_coverage` for the
-same five, but that flag describes *its* odds source rather than ours.
+Fifteen competitions. There is one external mapping left: prices come from
+StatPitch keyed by `fixture_id`, so nothing has to be looked up for them — but
+final scores and club crests both come from ESPN, and both are addressed by the
+same league slug. One mapping, two consumers.
 
-There is one external mapping left. Prices come from StatPitch keyed by
-`fixture_id`, so nothing has to be looked up for them — but final scores and
-club crests both come from ESPN, and both are addressed by the same league slug.
-One mapping, two consumers.
+**Four sets, and they are not interchangeable.** They were, once. Until the
+Primeira Liga, Eredivisie and Süper Lig arrived, "everything served", "what has
+a price", "what can produce a bet" and "what a free account sees" all named the
+same five leagues, and this file held a single constant with a comment claiming
+they were one idea. They are not, and collapsing them again is how the free tier
+silently gains a league nobody decided to give away:
+
+    ALL_COMPETITIONS   15   everything StatPitch serves
+    PRICED_LEAGUES      8   `odds_coverage: true` — has a market
+    STAKEABLE_LEAGUES   6   measured to earn, so a bet is possible
+    FREE_TIER_LEAGUES   5   a promise on the pricing page
+
+Each is written out in full rather than derived from another, because every
+derivation that looked safe is exactly what broke.
 """
 
-# Competitions StatPitch itself can price. Kept as a set so the sync can flag a
+# Competitions StatPitch can price. Kept as a set so the sync can flag a
 # mismatch between what we ask for and what StatPitch believes it covers.
-STATPITCH_ODDS_COVERAGE: frozenset[str] = frozenset(
+PRICED_LEAGUES: frozenset[str] = frozenset(
+    {
+        "ENG.PL",
+        "ESP.LALIGA",
+        "GER.BUNDESLIGA",
+        "ITA.SERIEA",
+        "FRA.LIGUE1",
+        "POR.PRIMEIRA",
+        "NED.EREDIVISIE",
+        "TUR.SUPERLIG",
+    }
+)
+
+# Where the selection rule has been *measured* to earn. A priced league is not
+# automatically a bettable one: the Eredivisie's own CLV estimate is negative
+# (-0.22%, t=-0.82) and the Primeira Liga's is positive but unresolvable at
+# n=974 (+0.27%, t=+1.07). Both are served in full — fixtures, predictions,
+# prices — and neither can produce a bet.
+#
+# This is a **fallback**, not the authority. The scope is re-measured upstream
+# and published per day on `/bets/today` as `selection_rule.competitions`; the
+# Primeira Liga is explicitly expected to be reconsidered. Read the stored value
+# where one exists and only fall back to this for a database that has never
+# synced — hardcoding it would mean an upstream re-measurement and our UI
+# quietly disagreeing.
+STAKEABLE_LEAGUES: frozenset[str] = frozenset(
+    {
+        "ENG.PL",
+        "ESP.LALIGA",
+        "GER.BUNDESLIGA",
+        "ITA.SERIEA",
+        "FRA.LIGUE1",
+        "TUR.SUPERLIG",
+    }
+)
+
+# What a free account sees. Pinned by hand, and deliberately not derived from
+# any of the sets above.
+#
+# It used to be `PRICED_LEAGUES` on the reasoning that "the leagues we can
+# price" and "the leagues free sees" were the same idea. They coincided; they
+# were never the same idea. One is a fact about our data sources and the other
+# is a commitment on the pricing page — "The 5 priced leagues only" — and
+# leaving them joined meant the next league we could price became a giveaway.
+# Widening this is a pricing decision, made here on purpose.
+FREE_TIER_LEAGUES: frozenset[str] = frozenset(
     {
         "ENG.PL",
         "ESP.LALIGA",
@@ -46,6 +102,9 @@ ESPN_LEAGUE_SLUGS: dict[str, str] = {
     "GER.BUNDESLIGA": "ger.1",
     "ITA.SERIEA": "ita.1",
     "FRA.LIGUE1": "fra.1",
+    "POR.PRIMEIRA": "por.1",
+    "NED.EREDIVISIE": "ned.1",
+    "TUR.SUPERLIG": "tur.1",
     "ENG.FA_CUP": "eng.fa",
     "ESP.COPA_DEL_REY": "esp.copa_del_rey",
     "GER.DFB_POKAL": "ger.dfb_pokal",
@@ -62,6 +121,9 @@ ALL_COMPETITIONS: frozenset[str] = frozenset(
         "GER.BUNDESLIGA",
         "ITA.SERIEA",
         "FRA.LIGUE1",
+        "POR.PRIMEIRA",
+        "NED.EREDIVISIE",
+        "TUR.SUPERLIG",
         "ENG.FA_CUP",
         "ESP.COPA_DEL_REY",
         "GER.DFB_POKAL",
@@ -80,6 +142,11 @@ def espn_slug_for(competition_id: str) -> str | None:
 
 # How each competition is named, as ESPN names it. `(name, short_name)`.
 #
+# Note the ID prefixes on the three newest: `POR`/`NED`/`TUR` are Club Elo ISO-3
+# country codes, not the ISO-2 codes the rest of the world uses. They are
+# StatPitch's identifiers, opaque to us, and must match exactly — "PT" would
+# simply not resolve.
+#
 # The long form is what a page heading wants; the short form is what fits in a
 # filter chip beside a crest. Both are taken from ESPN rather than invented, so
 # they agree with the icons that come from the same place — and so nobody has to
@@ -90,6 +157,9 @@ COMPETITION_NAMES: dict[str, tuple[str, str]] = {
     "GER.BUNDESLIGA": ("German Bundesliga", "Bundesliga"),
     "ITA.SERIEA": ("Italian Serie A", "Serie A"),
     "FRA.LIGUE1": ("French Ligue 1", "Ligue 1"),
+    "POR.PRIMEIRA": ("Portuguese Primeira Liga", "Primeira Liga"),
+    "NED.EREDIVISIE": ("Dutch Eredivisie", "Eredivisie"),
+    "TUR.SUPERLIG": ("Turkish Super Lig", "Super Lig"),
     "ENG.FA_CUP": ("English FA Cup", "FA Cup"),
     "ESP.COPA_DEL_REY": ("Spanish Copa del Rey", "Copa del Rey"),
     "GER.DFB_POKAL": ("German Cup", "DFB-Pokal"),

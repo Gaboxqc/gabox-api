@@ -20,7 +20,12 @@ from sqlmodel import Session, select
 
 from api.core.config import settings
 from api.statpitch.accounts.models import StatPitchAccount, utcnow
-from api.statpitch.leagues import ALL_COMPETITIONS, STATPITCH_ODDS_COVERAGE
+from api.statpitch.leagues import (
+    ALL_COMPETITIONS,
+    FREE_TIER_LEAGUES,
+    PRICED_LEAGUES,
+    STAKEABLE_LEAGUES,
+)
 from api.statpitch.serialization import FixtureFreeRead, FixtureFullRead, serialize_fixture
 from api.statpitch.tiers import (
     POLICIES,
@@ -87,16 +92,41 @@ def test_paid_tiers_are_uncapped():
     assert policy_for("elite").daily_predictions is None
 
 
-def test_free_sees_only_the_priced_leagues():
-    """Five, and they are the same five we can price — one idea, one constant."""
-    assert visible_competitions("free") == STATPITCH_ODDS_COVERAGE
+def test_free_sees_its_own_five_leagues():
+    """Five, and they are a pricing promise rather than a derived set.
+
+    They used to be "the leagues we can price", which was true only while those
+    happened to be the same five. StatPitch now prices eight.
+    """
+    assert visible_competitions("free") == FREE_TIER_LEAGUES
     assert len(visible_competitions("free")) == 5
 
 
-def test_paid_tiers_see_all_twelve():
+def test_free_does_not_widen_when_we_can_price_more_leagues():
+    """The guard for the coupling this replaced.
+
+    A league becoming priceable is an upstream event; a league becoming free is
+    a decision. If these two sets are ever equal again, someone has re-derived
+    one from the other and given away three leagues by accident.
+    """
+    assert FREE_TIER_LEAGUES < PRICED_LEAGUES
+    assert len(PRICED_LEAGUES - FREE_TIER_LEAGUES) == 3
+
+
+def test_the_four_league_sets_stay_properly_nested():
+    """Every set is a subset of the one above it, and none is equal to another.
+
+    Equality anywhere means two distinct ideas have been collapsed back into one
+    constant, which is the failure this file exists to catch.
+    """
+    assert STAKEABLE_LEAGUES < PRICED_LEAGUES < ALL_COMPETITIONS
+    assert FREE_TIER_LEAGUES < PRICED_LEAGUES
+
+
+def test_paid_tiers_see_every_competition():
     assert visible_competitions("pro") == ALL_COMPETITIONS
     assert visible_competitions("elite") == ALL_COMPETITIONS
-    assert len(ALL_COMPETITIONS) == 12
+    assert len(ALL_COMPETITIONS) == 15
 
 
 @pytest.mark.parametrize(
@@ -344,7 +374,16 @@ def test_the_match_of_the_day_is_free(client, make_fixture, seed_fixtures):
     assert "odds_home" not in body
 
 
-def test_the_settings_still_expose_the_free_league_set():
-    """The free scope is defined as "the leagues we can price", so a change to
-    the sync's coverage moves the free tier with it — deliberately."""
-    assert set(settings.statpitch_competitions) <= set(STATPITCH_ODDS_COVERAGE)
+def test_the_sync_scope_may_exceed_the_free_scope():
+    """The inverse of what this once asserted.
+
+    It used to require the sync scope to sit inside the free scope, because the
+    two were the same set. They are not: the sync pulls all eight priced
+    leagues, and free sees five of them. Syncing a league is a cost decision,
+    showing it for nothing is a pricing one, and this asserts they are allowed
+    to disagree.
+    """
+    synced = set(settings.statpitch_competitions)
+
+    assert synced <= set(PRICED_LEAGUES)
+    assert synced > set(FREE_TIER_LEAGUES)

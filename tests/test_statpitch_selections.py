@@ -1,8 +1,11 @@
 """Parsing StatPitch's priced card, and the guards around what a price means.
 
 Every payload in `tests/fixtures/statpitch` is a real capture from the live
-service (config `dec-2026.08.1-experimental`, schema_version 1, 2026-09-01),
-trimmed only in row count. Testing against invented JSON would test our idea of
+service (config `dec-2026.08.1-experimental`, schema_version 1), trimmed only in
+row count. There are two `/bets/today` captures on purpose — one from 2026-09-01
+before the rule published its competition scope, one from 2026-09-04 after — and
+they are empty for different reasons, which is the distinction the scope exists
+to make readable. Testing against invented JSON would test our idea of
 the contract rather than the contract, which is the mistake these captures
 exist to prevent — the published contract and the deployed service disagree in
 several places, and the captures are the half that is true.
@@ -21,6 +24,7 @@ from api.statpitch.client import (
     fetch_card,
     fetch_fixture_window,
 )
+from api.statpitch.leagues import STAKEABLE_LEAGUES
 from api.statpitch.models import (
     SPBetsToday,
     SPCard,
@@ -323,3 +327,77 @@ class TestStoredSelection:
                 fixture_id="x", selection="1x2_home", market_family="1x2", odds=odds
             )
             assert not row.bettable
+
+
+class TestTheRuleScope:
+    """`selection_rule.competitions` — the only way to read why a league is quiet.
+
+    StatPitch prices eight leagues and the rule is measured in six. The two it
+    excludes are served in full and can never produce a bet, which is a
+    measurement rather than a gap in coverage.
+    """
+
+    def test_the_scope_is_published_and_narrower_than_what_is_priced(self):
+        rule = SPBetsToday.model_validate(_load("bets_today_nothing_qualified")).selection_rule
+
+        assert rule.competitions == [
+            "ENG.PL",
+            "ESP.LALIGA",
+            "FRA.LIGUE1",
+            "GER.BUNDESLIGA",
+            "ITA.SERIEA",
+            "TUR.SUPERLIG",
+        ]
+        assert "NED.EREDIVISIE" not in rule.competitions
+        assert "POR.PRIMEIRA" not in rule.competitions
+
+    def test_the_local_fallback_agrees_with_what_upstream_publishes(self):
+        """Not a duplicate of the assertion above — a drift alarm.
+
+        `STAKEABLE_LEAGUES` is only ever a fallback for a database that has
+        never synced, but a fallback that disagrees with reality is worse than
+        none. If upstream re-measures and this fails, the constant is stale;
+        update it, and check nothing has started treating it as authoritative.
+        """
+        rule = SPBetsToday.model_validate(_load("bets_today_nothing_qualified")).selection_rule
+
+        assert set(rule.competitions) == set(STAKEABLE_LEAGUES)
+
+    def test_fallback_enabled_is_carried_even_though_it_is_undocumented(self):
+        rule = SPBetsToday.model_validate(_load("bets_today_nothing_qualified")).selection_rule
+
+        assert rule.fallback_enabled is True
+
+    def test_an_older_payload_without_a_scope_parses_as_empty(self):
+        """The pre-scope capture. Absent must not raise, and must not be
+        mistaken for a scope of nothing."""
+        rule = SPBetsToday.model_validate(_load("bets_today")).selection_rule
+
+        assert rule.competitions == []
+        assert rule.fallback_enabled is None
+
+
+class TestTheTwoWaysADayCanBeEmpty:
+    """Both captures are real, and they are empty for different reasons.
+
+    This is the distinction the scope exists to make readable. Neither payload
+    carries a reason code that separates them — an empty slate is
+    `NO_QUALIFYING_SELECTION` either way — so `empty_because.cause` and the rule
+    scope are the only things that tell them apart.
+    """
+
+    def test_no_prices_published_yet(self):
+        bets = SPBetsToday.model_validate(_load("bets_today"))
+
+        assert bets.count == 0
+        assert bets.empty_because.cause == "fixtures_today_carry_no_price"
+
+    def test_priced_and_assessed_but_nothing_cleared_the_rule(self):
+        bets = SPBetsToday.model_validate(_load("bets_today_nothing_qualified"))
+
+        assert bets.count == 0
+        assert bets.empty_because.cause == "assessed_but_nothing_qualified"
+
+    def test_both_still_carry_the_caveat(self):
+        for name in ("bets_today", "bets_today_nothing_qualified"):
+            assert SPBetsToday.model_validate(_load(name)).caveat

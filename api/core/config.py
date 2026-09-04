@@ -77,14 +77,22 @@ class Settings(BaseSettings):
     # pays a cold start of tens of seconds. This is not a value to shrink.
     statpitch_timeout_seconds: float = 60.0
 
-    # Which competitions to sync. Defaults to the five with an odds market we
-    # can price against; the seven cups get predictions but never a bet.
+    # Which competitions to sync: the eight StatPitch prices. Six of those can
+    # produce a bet — the Eredivisie and Primeira Liga are served in full and
+    # permanently outside the staking scope, which is a measurement rather than
+    # a gap. The seven cups get predictions but never a price.
+    #
+    # Widening this is close to free now: scores come from ESPN keyless, so each
+    # added league costs one unmetered request per run.
     statpitch_competitions: list[str] = [
         "ENG.PL",
         "ESP.LALIGA",
         "GER.BUNDESLIGA",
         "ITA.SERIEA",
         "FRA.LIGUE1",
+        "POR.PRIMEIRA",
+        "NED.EREDIVISIE",
+        "TUR.SUPERLIG",
     ]
 
     # The day the frontend calls "today" rolls over at local midnight here.

@@ -175,13 +175,24 @@ async def _store_crest(
 
 
 async def _backfill_competitions(report: Report, *, refresh: bool, dry_run: bool) -> None:
-    """Twelve league badges, through the same pipeline as the crests.
+    """One league badge per competition, through the same pipeline as the crests.
 
     No matching involved: a competition already knows its ESPN slug, so this is
     fetch, normalise, upload — the hard part was only ever the club names.
     """
     with Session(engine) as db:
-        seed_competitions(db)
+        # Not under `--dry-run`. This inserts and commits, and it used to run
+        # before the flag was consulted — so a "report, change nothing" run
+        # silently seeded three new competitions into production, ahead of the
+        # migration meant to add them. A dry run that writes is worse than no
+        # dry run, because it is trusted.
+        #
+        # Skipping it means a dry run against a registry that has not been
+        # migrated yet reports nothing for the missing competitions. That is
+        # the honest answer: they are not there.
+        if not dry_run:
+            seed_competitions(db)
+
         rows = [
             row
             for row in all_competitions(db)

@@ -18,10 +18,11 @@ from api.core.database import SessionDep
 from api.core.deps import PageDep
 from api.core.security import validate_api_key
 from api.statpitch.accounts.deps import CallerTier, CurrentAccount
-from api.statpitch.bets import build_bets_today
+from api.statpitch.bets import build_bets_today, stakeable_competitions
 from api.statpitch.client import StatPitchError, StatPitchRefusal
 from api.statpitch.clock import current_window
 from api.statpitch.competitions import all_competitions
+from api.statpitch.leagues import PRICED_LEAGUES
 from api.statpitch.models import (
     BetsTodayRead,
     CompetitionRead,
@@ -179,19 +180,35 @@ async def sync(db: SessionDep):
     summary="Every competition, with its icon",
     description=(
         "Ungated on purpose: which competitions exist is navigation, not "
-        "product. `free_tier` says which of them a free account can actually "
-        "see, so the rest can be shown as an upgrade rather than silently "
-        "returning nothing."
+        "product.\n\n"
+        "Three independent flags, because they answer three different "
+        "questions. `free_tier` says a free account can see it, so the rest "
+        "render as an upgrade rather than as an empty list. `priced` says "
+        "StatPitch publishes a market for it. `stakeable` says the selection "
+        "rule is measured to earn there, and is the **only** way to know why a "
+        "league never has picks — an empty slate returns the same reason code "
+        "whether a competition is outside the rule's scope or simply had a "
+        "quiet day.\n\n"
+        "Two leagues are `priced` and not `stakeable`: the Eredivisie and the "
+        "Primeira Liga are served in full and can never produce a bet. That is "
+        "a measured result, not a gap in coverage."
     ),
 )
 async def list_competitions(db: SessionDep):
+    # Resolved once for the whole list rather than per row: it is one query,
+    # and asking it fifteen times would be fifteen.
+    stakeable = stakeable_competitions(db)
+    free = visible_competitions("free")
+
     return [
         CompetitionRead(
             competition_id=row.competition_id,
             name=row.name,
             short_name=row.short_name,
             icon_url=row.icon_url,
-            free_tier=row.competition_id in visible_competitions("free"),
+            free_tier=row.competition_id in free,
+            priced=row.competition_id in PRICED_LEAGUES,
+            stakeable=row.competition_id in stakeable,
         )
         for row in all_competitions(db)
     ]

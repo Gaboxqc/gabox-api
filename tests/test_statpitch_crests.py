@@ -429,3 +429,52 @@ def test_icons_and_crests_never_collide():
     assert storage.competition_icon_key("ENG.PL", source, 512) != storage.crest_key(
         "ENG.PL", source, 512
     )
+
+
+class TestTheDryRunWritesNothing:
+    """`--dry-run` seeded three competitions into production once. Never again.
+
+    `_backfill_competitions` called `seed_competitions`, which inserts and
+    commits, before the `dry_run` flag was consulted — so a run whose whole
+    contract is "report, change nothing" created registry rows ahead of the
+    migration meant to create them. A dry run that writes is worse than having
+    no dry run at all, because it is the one people trust.
+    """
+
+    @staticmethod
+    def _competitions(engine) -> int:
+        from sqlmodel import Session, select
+
+        from api.statpitch.competitions import StatPitchCompetition
+
+        with Session(engine) as db:
+            return len(db.exec(select(StatPitchCompetition)).all())
+
+    @pytest.fixture(name="script")
+    def script_fixture(self, engine, monkeypatch):
+        """The backfill script, pointed at the test database and offline."""
+        import scripts.backfill_crests as backfill
+
+        async def _no_logo(_client, _slug):
+            return None
+
+        monkeypatch.setattr(backfill, "engine", engine)
+        monkeypatch.setattr(backfill, "fetch_league_logo", _no_logo)
+        return backfill
+
+    def test_a_dry_run_leaves_the_registry_untouched(self, engine, script):
+        import asyncio
+
+        assert self._competitions(engine) == 0
+
+        asyncio.run(script._backfill_competitions(script.Report(), refresh=False, dry_run=True))
+
+        assert self._competitions(engine) == 0
+
+    def test_a_real_run_still_seeds(self, engine, script):
+        """The guard must not have turned the seeding off altogether."""
+        import asyncio
+
+        asyncio.run(script._backfill_competitions(script.Report(), refresh=False, dry_run=False))
+
+        assert self._competitions(engine) == 15

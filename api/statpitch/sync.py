@@ -48,7 +48,7 @@ from api.statpitch.client import (
     fetch_matchday_odds,
 )
 from api.statpitch.clock import Window, current_window, to_local_date
-from api.statpitch.leagues import STATPITCH_ODDS_COVERAGE
+from api.statpitch.leagues import PRICED_LEAGUES
 from api.statpitch.models import (
     SPBetsToday,
     SPFixture,
@@ -478,6 +478,11 @@ def _upsert_bet_day(session: Session, day: date, payload: SPBetsToday) -> None:
     row.config_status = payload.config_status or rule.status
     row.selection_rule_status = rule.status
     row.selection_rule = rule.model_dump(mode="json")
+    # Lifted out of the blob because slice C filters on it. `or None` rather
+    # than an empty list: upstream not publishing a scope and upstream
+    # publishing an empty one would otherwise be indistinguishable, and only the
+    # first is true today for an older config.
+    row.selection_rule_competitions = list(rule.competitions) or None
     row.by_basis = payload.by_basis or None
     row.refusal_reason_code = refusal.reason_code if refusal else None
     row.refusal_reason = refusal.reason if refusal else None
@@ -500,12 +505,14 @@ async def run_sync(session: Session) -> SyncReport:
         report.warnings.append("No competitions configured; nothing to sync.")
         return report
 
-    uncovered = competitions - STATPITCH_ODDS_COVERAGE
+    uncovered = competitions - PRICED_LEAGUES
     if uncovered:
+        # Nothing else can price them now that The Odds API is gone, so these
+        # fixtures store their prediction and stay unpriced for good.
         report.warnings.append(
-            "StatPitch reports no odds source for "
-            f"{', '.join(sorted(uncovered))}; those fixtures are priced only if "
-            "The Odds API covers them."
+            "StatPitch publishes no odds for "
+            f"{', '.join(sorted(uncovered))}; those fixtures store a prediction "
+            "but will never carry a price or a bet."
         )
 
     # ── 1. Everything StatPitch has to say ───────────────────────────────────
